@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  :root{--bg:#f6f4ee;--card:#fffdf7;--line:#e4dccb;--text:#241f18;--muted:#776b5c;--accent:#b45309;--ok:#15803d;--bad:#b91c1c}
+  *{box-sizing:border-box} body{margin:0;height:100vh;display:flex;flex-direction:column;background:radial-gradient(circle at top left,#fff7df 0,#f6f4ee 36%,#efe8dc 100%);color:var(--text);font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif}
+  header{padding:18px 28px;background:linear-gradient(135deg,#7c2d12,#b45309 58%,#d97706);color:white;display:flex;align-items:center;gap:14px}
+  header h1{font-size:21px;margin:0}.sub{opacity:.78;font-size:13px}.badge{margin-left:auto;padding:5px 13px;border-radius:999px;background:rgba(255,255,255,.18);font-size:12px;font-weight:700}.elapsed{font-size:12px;opacity:.78;font-variant-numeric:tabular-nums}
+  main{display:flex;min-height:0;flex:1}.left{width:390px;background:rgba(255,253,247,.92);border-right:1px solid var(--line);padding:18px;overflow:auto}.right{flex:1;display:flex;flex-direction:column;min-width:0}
+  h3{font-size:12px;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);margin:18px 0 9px}.group{margin-bottom:13px}label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+  textarea,input{width:100%;border:1px solid var(--line);border-radius:10px;background:#fffaf0;color:var(--text);padding:10px 12px;font-size:14px;font-family:inherit}textarea{height:220px;resize:vertical;line-height:1.5}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:14px;color:var(--muted);padding:8px 0}.row input{width:auto}
+  .inline-field{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px;color:var(--muted);font-size:14px}.inline-field label{margin:0;font-size:14px}.inline-field input{width:84px;text-align:center;padding:8px 10px}
+  button{border:0;border-radius:11px;padding:12px 14px;font-size:15px;font-weight:800;cursor:pointer}.primary{width:100%;background:linear-gradient(135deg,#92400e,#d97706);color:white;box-shadow:0 8px 22px rgba(180,83,9,.24)}.secondary{width:100%;margin-top:8px;background:#fff7ed;color:var(--accent);border:1px solid #fed7aa}
+  .hint{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}.chat{flex:1;overflow:auto;padding:22px 28px}.empty{height:100%;display:flex;align-items:center;justify-content:center;color:#a39582;flex-direction:column}.empty .icon{font-size:52px;margin-bottom:12px}
+  .agent-item,.stage-item{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;color:var(--muted)}.agent-dot,.stage-dot{width:8px;height:8px;border-radius:99px;background:var(--accent);flex-shrink:0}.agent-count{margin-left:auto;background:#fff7ed;color:var(--accent);border:1px solid #fed7aa;border-radius:999px;padding:1px 7px;font-size:11px;font-weight:800}.stage-item.done{color:var(--ok)}.stage-item.active{color:var(--accent);font-weight:850}.stage-item.pending{opacity:.45}
+  .thinking{display:none;align-items:center;gap:9px;padding:8px 28px;color:var(--muted);font-size:12px;background:rgba(255,253,247,.9)}.thinking.active{display:flex}.dots{display:flex;gap:4px}.dots span{width:7px;height:7px;border-radius:50%;background:var(--accent);animation:blink 1.2s infinite}.dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}@keyframes blink{0%,100%{opacity:.25}50%{opacity:1}}
+  .msg{display:flex;gap:11px;margin-bottom:14px}.av{width:34px;height:34px;border-radius:10px;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;flex-shrink:0}.body{flex:1;min-width:0}.head{font-size:13px;font-weight:800;margin-bottom:4px;color:var(--accent);display:flex;gap:8px;align-items:baseline}.time{font-size:11px;color:var(--muted);font-weight:500}.content{white-space:pre-wrap;word-break:break-word;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 15px;font-size:14px;line-height:1.65;box-shadow:0 1px 5px rgba(63,42,15,.06)}.content.long{max-height:170px;overflow:hidden;position:relative}.content.long.expanded{max-height:none}.expand{display:inline-block;margin-top:5px;font-size:12px;color:var(--accent);font-weight:800;cursor:pointer}.system .content{background:#fff7ed;color:#7c2d12}.bad .content{background:#fef2f2;color:#7f1d1d;border-color:#fecaca}
+  .footer{height:42px;background:rgba(255,253,247,.95);border-top:1px solid var(--line);display:flex;align-items:center;gap:16px;padding:0 28px;color:var(--muted);font-size:12px}
+  .footer label{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:12px}.footer input{width:auto;margin:0}
+  .results{max-height:44vh;overflow:auto;border-top:2px solid var(--accent);background:rgba(255,253,247,.96);padding:14px 24px;display:block}.results.collapsed{max-height:58px;overflow:hidden}.results.pinned{max-height:70vh;flex:0 0 70vh}.table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}.table th{color:var(--accent);background:#fff7ed}.num{text-align:right;font-variant-numeric:tabular-nums}
+  .cards{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin:8px 0 12px}.card{border:1px solid var(--line);border-radius:12px;background:#fffaf0;padding:10px 12px}.card .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px}.card .v{font-size:18px;font-weight:850;margin-top:3px}.summary{border:1px solid var(--line);border-radius:12px;background:#fffdf7;padding:11px 13px;margin:8px 0 12px;font-size:13px;line-height:1.55}.summary b{color:var(--accent)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
+  .source-list{list-style:none;padding:0;margin:8px 0 0}.source-item{border-top:1px solid var(--line);padding:8px 0}.source-item:first-child{border-top:0}.source-title{font-weight:850;color:var(--text)}.source-meta{font-size:12px;color:var(--muted);line-height:1.45;margin-top:3px}.source-pill{display:inline-block;border:1px solid #fed7aa;background:#fff7ed;color:var(--accent);border-radius:999px;padding:2px 7px;font-size:11px;font-weight:800;margin-right:5px}.candidate-line{font-size:12px;color:var(--muted);line-height:1.45;margin-top:4px}.candidate-line b{color:var(--text)}
+  .query-plan{margin-top:6px;border:1px solid var(--line);border-radius:10px;background:#fffaf0;overflow:hidden}.query-group{padding:6px 9px;border-top:1px solid var(--line)}.query-group:first-child{border-top:0}.query-title{font-size:12px;font-weight:850;color:var(--accent);margin-bottom:3px}.query-lines{display:grid;gap:2px}.query-line{font-size:12px;line-height:1.25;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .codeblock{white-space:pre;overflow:auto;max-height:52vh;background:#1f1a14;color:#fff7ed;border-radius:12px;padding:13px 15px;font-size:12px;line-height:1.5;border:1px solid #3a2d1f}.logblock{white-space:pre-wrap;overflow:auto;max-height:34vh;background:#fffaf0;border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.55}
+  .section-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.section-actions{display:flex;gap:8px;align-items:center}.toggle{border:1px solid #fed7aa;background:#fff7ed;color:var(--accent);border-radius:999px;padding:6px 11px;font-size:12px;font-weight:800}.toggle.active{background:var(--accent);color:white;border-color:var(--accent)}
+  @media (max-width:900px){main{flex-direction:column}.left{width:100%;max-height:46vh;border-right:0;border-bottom:1px solid var(--line)}.cards{grid-template-columns:repeat(2,minmax(120px,1fr))}}
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ title }}</h1><span class="sub">{{ subtitle }}</span><span class="badge" id="badge">待运行</span><span class="elapsed" id="elapsed"></span>
+</header>
+<main>
+  <section class="left">
+    <h3>任务描述</h3>
+    <div class="group"><label>给 Agent 的建模描述</label><textarea id="prompt">请先进行外部文献/网页检索，再为高固含浆料屈服值预测生成可运行训练代码。
+
+要求：
+1. 使用 YIELD_EXECUTION_MODE=free_search，搜索“机理 × LLM生成模型 × 组合方式”。
+2. 当前数据是小样本高维工艺数据，LLM 模型需要考虑组成/配比、温度/压力、混合工艺、phys_* 机理派生特征。
+3. LLM 可以生成机理 shape 和模型 make_estimator，但固定 harness 负责防泄漏、交叉验证、超参预算、评分和冠军选择。
+4. 不强行追求新模型当冠军；如果固定 ridge/rf 更好，要诚实报告。
+5. 报告必须区分模型贡献和机理贡献，查看 contribution_diagnostics。
+6. 默认不启用外部搜索；需要补文献证据时再手动打开。</textarea></div>
+    <h3>数据</h3>
+    <div class="group"><label>训练 CSV</label><input id="data" value="/Users/lijiayao/my-project/automl-agent-yield/agent_workspace/data/generated_yield_stress/generated_yield_stress_data_engineered.csv"></div>
+    <div class="group"><label>临时测试 CSV / Anchor（没有就保持默认不存在路径）</label><input id="test" value="/Users/lijiayao/my-project/automl-agent-yield/agent_workspace/data/generated_yield_stress/no_anchor.csv"></div>
+    <div class="group"><label>输出目录</label><input id="run-dir" value=""></div>
+    <h3>运行</h3>
+    <div class="row"><span>启用外部搜索</span><input type="checkbox" id="external"></div>
+    <div class="row"><span>搜索失败允许本地降级（调试）</span><input type="checkbox" id="fallback" checked></div>
+    <div class="inline-field"><label for="revise">Manager 修复重试轮数</label><input type="number" id="revise" value="0" min="0" max="8"></div>
+    <button class="primary" id="run" onclick="startRun()">开始运行</button>
+    <button class="secondary" id="stop" onclick="stopRun()" style="display:none;border-color:#fecaca;color:var(--bad);background:#fff5f5">强制停止 / 重置</button>
+    <button class="secondary" onclick="loadPredictions()">刷新运行结果</button>
+    <p class="hint">当前 dashboard 默认跑 free_search normal：CandidateAgent 生成机理/模型/组合方式，OperationAgent 生成 LLM 机理和模型代码，harness 统一 OOF 评分并产出 <code>metrics/free_search_report.json</code>、<code>metrics/predictions.csv</code>、<code>predict.py</code>。</p>
+    <h3>智能体</h3>
+    <div id="agents"></div>
+    <h3>流水线</h3>
+    <div id="stages"></div>
+  </section>
+  <section class="right">
+    <div class="chat" id="chat"><div class="empty" id="empty"><div class="icon">🧱</div><div>配置后点击开始运行</div></div></div>
+    <div class="thinking" id="thinking"><div class="dots"><span></span><span></span><span></span></div><span id="thinking-label">等待运行...</span></div>
+    <div class="results" id="results"></div>
+    <div class="footer"><span id="count">0 条消息</span><label><input type="checkbox" id="autoscroll" checked> 自动滚动</label><label><input type="checkbox" id="show-system"> 系统消息</label></div>
+  </section>
+</main>
+<script>
+const AGENTS={
+  user:{label:"用户描述",icon:"👤",color:"#7c3aed"},
+  manager:{label:"Agent Manager",icon:"🧠",color:"#15803d"},
+  search:{label:"SearchAgent",icon:"🔎",color:"#0e7490"},
+  data:{label:"DataAgent",icon:"📊",color:"#0e7490"},
+  model:{label:"ModelAgent",icon:"⚙️",color:"#1d4ed8"},
+  operation:{label:"OperationAgent",icon:"💻",color:"#b45309"},
+  system:{label:"System",icon:"⚠️",color:"#b91c1c"}
+};
+const STAGES=["INIT","PROFILE","SEARCH","CANDIDATE","PLAN","EXEC","VERIFY","END"];
+const STAGE_LABEL={INIT:"初始化",PROFILE:"数据画像",SEARCH:"外部搜索",CANDIDATE:"候选生成",PLAN:"建模计划",EXEC:"代码生成/执行",VERIFY:"结果验证",END:"完成"};
+let count=0, running=false, es=null, latestSummary=null, predictionsOpen=false, sourcesOpen=false, trainingOpen=false, resultsCollapsed=false, resultsPinned=false;
+let codeShownKey="", generatedCodeEventSeen=false;
+let currentStage="INIT", eventKeys=new Set(), agentCounts={}, historyLoaded=false;
+const MAX_HISTORY_EVENTS=120;
+const HISTORY_INLINE_LIMIT=6000;
+const chat=document.getElementById("chat"), empty=document.getElementById("empty");
+function esc(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+function compactMsg(msg,opts={}){
+  const text=String(msg??"");
+  if(text.includes("I am implementing the following instruction")){
+    return "OperationAgent 已收到搜索报告、建模计划和数据 profile，正在生成代码；完整上下文已保存在运行目录。";
+  }
+  if(opts.history&&text.startsWith("YIELD_GENERATED_CODE")){
+    const body=text.replace(/^YIELD_GENERATED_CODE\s*/,"");
+    const path=(body.split(/\n/).find(x=>x.startsWith("Path:"))||"").replace(/^Path:\s*/,"");
+    return `历史生成代码已省略，避免刷新页面时渲染过慢。${path?`\nPath: ${path}`:""}\n完整代码仍会在运行结果区读取，或查看 run 目录中的 generated_code.py。`;
+  }
+  if(opts.history&&text.startsWith("YIELD_TRAINING_LOG")){
+    const log=text.replace(/^YIELD_TRAINING_LOG\s*/,"");
+    return `YIELD_TRAINING_LOG\n历史训练日志已压缩显示，避免刷新页面卡住。\n\n${log.slice(-HISTORY_INLINE_LIMIT)}`;
+  }
+  if(opts.history&&text.length>HISTORY_INLINE_LIMIT){
+    return `${text.slice(0,HISTORY_INLINE_LIMIT)}\n\n...[历史消息已截断，完整内容在运行目录或 live_log.jsonl 中]`;
+  }
+  return text;
+}
+function addMsg(sender,msg,opts={}){
+  msg=compactMsg(msg,opts);
+  if(sender==="system"&&!document.getElementById("show-system").checked) return;
+  if(empty) empty.style.display="none"; count++; document.getElementById("count").textContent=count+" 条消息";
+  agentCounts[sender]=(agentCounts[sender]||0)+1;
+  updateStage(sender,msg);
+  renderAgents();
+  renderStages();
+  document.getElementById("thinking-label").textContent=(AGENTS[sender]?.label||sender)+" 处理中...";
+  const cls=sender==="system"?"system":(String(msg).toLowerCase().includes("failed")||String(msg).includes("失败")?"bad":"");
+  const agent=AGENTS[sender]||AGENTS.system;
+  const displaySender=agent.label;
+  const contentId="msg-"+count+"-"+Math.random().toString(36).slice(2,7);
+  const isGeneratedCode=String(msg||"").startsWith("YIELD_GENERATED_CODE");
+  const long=String(msg||"").length>700&&!isGeneratedCode;
+  const div=document.createElement("div"); div.className="msg "+cls;
+  let rendered="";
+  try{
+    rendered=formatMsg(msg);
+  }catch(err){
+    rendered=`${esc(String(msg).slice(0,3000))}<br><span class="source-meta">前端格式化失败：${esc(err&&err.message?err.message:err)}</span>`;
+  }
+  div.innerHTML=`<div class="av" style="background:${agent.color}">${agent.icon}</div><div class="body"><div class="head">${esc(displaySender)}<span class="time">${document.getElementById("elapsed").textContent||""}</span></div><div class="content ${long?'long':''}" id="${contentId}">${rendered}</div>${long?`<span class="expand" onclick="toggleExpand('${contentId}',this)">展开全部</span>`:""}</div>`;
+  chat.appendChild(div); if(document.getElementById("autoscroll").checked) chat.scrollTop=chat.scrollHeight;
+}
+function toggleExpand(id,btn){const el=document.getElementById(id); const on=el.classList.toggle("expanded"); btn.textContent=on?"收起":"展开全部";}
+function updateStage(sender,msg){
+  const text=String(msg||"");
+  const lower=text.toLowerCase();
+  if(sender==="data") currentStage="PROFILE";
+  if(sender==="search"||text.includes("YIELD_STAGE: search")||text.includes("SearchAgent")) currentStage="SEARCH";
+  if(text.includes("CandidateAgent")||text.includes("candidate model")||text.includes("候选")) currentStage="CANDIDATE";
+  if(sender==="model"||text.includes("ModelAgent")) currentStage=text.includes("CandidateAgent")?"CANDIDATE":"PLAN";
+  if(sender==="operation"||text.includes("OperationAgent")) currentStage="EXEC";
+  if(text.includes("verification")||text.includes("guardrails")||text.includes("yield verification")) currentStage="VERIFY";
+  if(
+    text.includes("Yield pipeline failed")||
+    text.includes("Deterministic yield verification failed")||
+    text.includes("did not pass execution/guardrails")||
+    text.includes("Pipeline crashed")
+  ){
+    running=false; currentStage="VERIFY";
+    document.getElementById("thinking").classList.remove("active");
+    document.getElementById("badge").textContent="失败/需修复";
+    document.getElementById("run").textContent="重新运行";
+    document.getElementById("stop").style.display="none";
+    renderStages();
+    return;
+  }
+  if(text.startsWith("Yield pipeline completed. Run dir:")||text.includes("passed deterministic guardrails")) currentStage="END";
+  if(currentStage==="END"){running=false; document.getElementById("thinking").classList.remove("active"); document.getElementById("badge").textContent="已完成"; document.getElementById("run").textContent="重新运行"; document.getElementById("stop").style.display="none";}
+}
+function renderAgents(){
+  const box=document.getElementById("agents");
+  box.innerHTML=Object.entries(agentCounts).map(([k,v])=>{
+    const a=AGENTS[k]||AGENTS.system;
+    return `<div class="agent-item"><span class="agent-dot" style="background:${a.color}"></span>${esc(a.label)}<span class="agent-count">${v}</span></div>`;
+  }).join("")||`<div class="hint">暂无智能体消息</div>`;
+}
+function renderStages(){
+  const ci=STAGES.indexOf(currentStage);
+  document.getElementById("stages").innerHTML=STAGES.map((s,i)=>{
+    const cls=i<ci?"done":i===ci?"active":"pending";
+    return `<div class="stage-item ${cls}"><span class="stage-dot"></span>${STAGE_LABEL[s]}</div>`;
+  }).join("");
+}
+function formatMsg(msg){
+  const text=String(msg??"");
+  if(text.startsWith("YIELD_SEARCH_SUMMARY")){
+    const lines=text.split(/\n+/).slice(1);
+    const row=(name)=>esc((lines.find(x=>x.startsWith(name+":"))||"").replace(name+":","").trim()||"none");
+    return `<div class="summary"><b>外部搜索摘要</b><br><span class="source-pill">total ${row("TotalSources")}</span><span class="source-pill">sources ${row("SourceTypes")}</span><br><b>Provider</b>: ${row("Providers")}<br><b>Relevance</b>: ${row("Relevance")}<br><span class="source-meta">${row("QualityRule")}</span></div>`;
+  }
+  if(text.startsWith("YIELD_QUERY_GROUPS")){
+    return renderQueryGroupsMessage(text);
+  }
+  if(text.startsWith("YIELD_TRAINING_LOG")){
+    return `<b>训练过程输出</b><div class="logblock">${esc(text.replace(/^YIELD_TRAINING_LOG\s*/,""))}</div>`;
+  }
+  if(text.startsWith("YIELD_CODE_SAVED")){
+    return `<b>生成代码已保存</b><br><span class="mono">${esc(text.replace(/^YIELD_CODE_SAVED:\s*/,""))}</span>`;
+  }
+  if(text.startsWith("YIELD_GENERATED_CODE")){
+    return renderGeneratedCodeMessage(text);
+  }
+  if(text.startsWith("YIELD_SOURCE_GROUP")){
+    return renderSourceGroupMessage(text);
+  }
+  if(text.startsWith("YIELD_SOURCE_FOUND")){
+    const lines=text.split(/\n+/);
+    const title=lines[0].replace(/^YIELD_SOURCE_FOUND\s*/,"");
+    const sourceType=(lines.find(x=>x.startsWith("SourceType:"))||"").replace("SourceType:","").trim();
+    const provider=(lines.find(x=>x.startsWith("Provider:"))||"").replace("Provider:","").trim();
+    const query=(lines.find(x=>x.startsWith("Query:"))||"").replace("Query:","").trim();
+    const link=(lines.find(x=>x.startsWith("Link:"))||"").replace("Link:","").trim();
+    const snippet=(lines.find(x=>x.startsWith("Snippet:"))||"").replace("Snippet:","").trim();
+    return `<b>${esc(title)}</b><br><span class="mono">${esc(sourceType)} · ${esc(provider)}</span><br><span class="mono">query: ${esc(query)}</span><br>${link?`<a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a><br>`:""}<span>${esc(snippet)}</span>`;
+  }
+  return esc(text);
+}
+function renderGeneratedCodeMessage(text){
+  const body=text.replace(/^YIELD_GENERATED_CODE\s*/,"");
+  const lines=body.split(/\n/);
+  const pathLine=lines[0]&&lines[0].startsWith("Path:")?lines.shift().replace(/^Path:\s*/,""):"";
+  const code=lines.join("\n").replace(/^\n+/,"");
+  return `<b>生成代码</b>${pathLine?`<br><span class="mono">${esc(pathLine)}</span>`:""}<pre class="codeblock">${esc(code)}</pre>`;
+}
+function renderQueryGroupsMessage(text){
+  const lines=text.split(/\n+/).slice(1);
+  const groups=[];
+  let cur=null;
+  for(const line of lines){
+    if(!line.trim()) continue;
+    if(!line.startsWith("- ")){
+      cur={title:line,queries:[]};
+      groups.push(cur);
+    }else if(cur){
+      cur.queries.push(line.replace(/^-\s*/,""));
+    }
+  }
+  const html=groups.map(g=>`
+    <div class="query-group">
+      <div class="query-title">${esc(g.title)}</div>
+      <div class="query-lines">${g.queries.map(q=>`<div class="query-line">- ${esc(q)}</div>`).join("")}</div>
+    </div>`).join("");
+  return `<b>外部检索计划</b><div class="source-meta">相同来源的 query 已合并展示，底层仍逐条检索。</div><div class="query-plan">${html}</div>`;
+}
+function renderSourceGroupMessage(text){
+  const lines=text.split(/\n+/);
+  const header=lines[0].replace(/^YIELD_SOURCE_GROUP\s*/,"");
+  const qStart=lines.indexOf("Queries:");
+  const tStart=lines.indexOf("TopSources:");
+  const qLines=(qStart>=0?tStart>=0?lines.slice(qStart+1,tStart):lines.slice(qStart+1):[]).filter(x=>x.startsWith("- "));
+  const sourceLines=tStart>=0?lines.slice(tStart+1):[];
+  const items=[];
+  for(let i=0;i<sourceLines.length;i++){
+    const line=sourceLines[i];
+    if(/^\[\d+\]/.test(line)){
+      const meta=(sourceLines[i+1]||"").trim();
+      const linkLine=(sourceLines[i+2]||"").trim().startsWith("Link:")?(sourceLines[i+2]||"").trim():"";
+      const snippetLine=(sourceLines[i+3]||"").trim().startsWith("Snippet:")?(sourceLines[i+3]||"").trim():"";
+      items.push({title:line,meta,link:linkLine.replace(/^Link:\s*/,""),snippet:snippetLine.replace(/^Snippet:\s*/,"")});
+    }
+  }
+  const queryHtml=qLines.length?`<div class="source-meta"><b>Queries</b>: ${esc(qLines.map(x=>x.replace(/^-\s*/,"")).join(" | "))}</div>`:"";
+  const itemHtml=items.length?`<ul class="source-list">${items.map(s=>`<li class="source-item"><div class="source-title">${esc(s.title)}</div><div class="source-meta">${esc(s.meta)}</div>${s.link?`<a class="mono" href="${esc(s.link)}" target="_blank" rel="noopener">${esc(s.link)}</a>`:""}${s.snippet?`<div class="source-meta">${esc(s.snippet)}</div>`:""}</li>`).join("")}</ul>`:`<div class="source-meta">No source in this group.</div>`;
+  return `<b>Search source group: ${esc(header)}</b>${queryHtml}${itemHtml}`;
+}
+function connectEvents(){
+  if(es) es.close(); es=new EventSource("/events");
+  es.onmessage=(e)=>{try{handleEvent(JSON.parse(e.data));}catch{}};
+}
+function handleEvent(ev,opts={}){
+  const key=`${ev.ts}|${ev.sender}|${ev.content}`;
+  if(eventKeys.has(key)) return;
+  eventKeys.add(key);
+  if(String(ev.content||"").startsWith("YIELD_GENERATED_CODE")) generatedCodeEventSeen=true;
+  if(ev.elapsed!==undefined) document.getElementById("elapsed").textContent=ev.elapsed+"s";
+  addMsg(ev.sender||"system", ev.content||"", opts);
+  if((ev.content||"").includes("YIELD_RESULT_SAVED")) loadPredictions();
+}
+async function startRun(){
+  if(running){
+    const status=await fetch("/api/status").then(r=>r.json()).catch(()=>({running:true}));
+    if(status.running) return;
+    running=false;
+  }
+  running=true; document.getElementById("badge").textContent="运行中"; document.getElementById("run").textContent="运行中...";
+  document.getElementById("stop").style.display="block"; document.getElementById("thinking").classList.add("active");
+  chat.innerHTML=""; count=0; eventKeys.clear(); agentCounts={}; currentStage="INIT"; codeShownKey=""; generatedCodeEventSeen=false; renderAgents(); renderStages(); document.getElementById("elapsed").textContent="";
+  const payload={prompt:document.getElementById("prompt").value,csv_path:document.getElementById("data").value,test_path:document.getElementById("test").value,run_dir:document.getElementById("run-dir").value,n_revise:Number(document.getElementById("revise").value||0),operation_attempts:3,budget:"normal",external_search:document.getElementById("external").checked,allow_search_fallback:document.getElementById("fallback").checked};
+  const res=await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  if(!res.ok){addMsg("system","启动失败: "+await res.text()); running=false; document.getElementById("badge").textContent="失败"; return;}
+  connectEvents();
+  pollStatus();
+}
+async function stopRun(){
+  await fetch("/api/stop",{method:"POST"}).catch(()=>{});
+  running=false; document.getElementById("badge").textContent="已中止"; document.getElementById("run").textContent="重新运行"; document.getElementById("stop").style.display="none"; document.getElementById("thinking").classList.remove("active");
+}
+async function pollStatus(){
+  const timer=setInterval(async()=>{
+    const s=await (await fetch("/api/status")).json();
+    if(!s.running){clearInterval(timer); running=false; document.getElementById("badge").textContent="已完成"; document.getElementById("run").textContent="重新运行"; document.getElementById("stop").style.display="none"; document.getElementById("thinking").classList.remove("active"); loadPredictions();}
+  },1000);
+}
+async function loadPredictions(){
+  try{
+    latestSummary=await (await fetch("/api/yield_summary")).json();
+  }catch(err){
+    latestSummary={exists:false};
+    addMsg("system",`运行结果加载失败：${err&&err.message?err.message:err}`);
+  }
+  renderSummary();
+  showGeneratedCodeInChat(latestSummary);
+}
+function showGeneratedCodeInChat(summary){
+  if(!summary||!summary.exists) return;
+  const code=summary.generated_code||summary.run_result?.code||"";
+  if(!code.trim()) return;
+  if(generatedCodeEventSeen) return;
+  const key=`${summary.run_dir}|${code.length}`;
+  if(codeShownKey===key) return;
+  codeShownKey=key;
+  generatedCodeEventSeen=true;
+  addMsg("operation", `YIELD_GENERATED_CODE\nPath: ${summary.generated_code_path||"run_result.code"}\n${code}`);
+}
+function togglePredictions(){predictionsOpen=!predictionsOpen; renderSummary();}
+function toggleSources(){sourcesOpen=!sourcesOpen; renderSummary();}
+function toggleTraining(){trainingOpen=!trainingOpen; renderSummary();}
+function toggleResultsCollapsed(){resultsCollapsed=!resultsCollapsed; if(resultsCollapsed) resultsPinned=false; renderSummary();}
+function toggleResultsPinned(){resultsPinned=!resultsPinned; if(resultsPinned) resultsCollapsed=false; renderSummary();}
+function renderSummary(){
+  const summary=latestSummary;
+  const box=document.getElementById("results");
+  box.classList.toggle("collapsed", resultsCollapsed);
+  box.classList.toggle("pinned", resultsPinned);
+  const controls=`<div class="section-head"><h3>运行结果</h3><div class="section-actions"><button class="toggle" onclick="loadPredictions()">刷新</button><button class="toggle ${resultsCollapsed?'active':''}" onclick="toggleResultsCollapsed()">${resultsCollapsed?'展开':'收起'}</button><button class="toggle ${resultsPinned?'active':''}" onclick="toggleResultsPinned()">${resultsPinned?'取消固定':'固定'}</button></div></div>`;
+  if(!summary||!summary.exists){
+    box.innerHTML=controls+`<div class="summary">暂无运行结果。运行完成后这里会显示搜索状态、指标、机理报告和预测表。</div>`;
+    return;
+  }
+  const rows=summary.predictions||[];
+  const rawMetrics=summary.metrics||{};
+  const metrics=normalizeMetrics(rawMetrics);
+  const mechanism=summary.mechanism_report||{};
+  const synthetic=summary.synthetic_data_report||{};
+  const search=summary.search_report||{};
+  const candidate=summary.candidate_report||{};
+  const snippets=search.snippets||[];
+  const trainingLog=summary.training_log||summary.run_result?.action_result||"";
+  const repairLogs=Array.isArray(summary.repair_logs)?summary.repair_logs:[];
+  const metricKeys=["R2","RMSE","MAE","MAPE"].filter(k=>metrics[k]!==undefined);
+  const metricCards=metricKeys.map(k=>`<div class="card"><div class="k">${esc(metricLabel(k, rawMetrics))}</div><div class="v">${fmt(metrics[k])}</div></div>`).join("");
+  const evalLabel=metrics.__source||rawMetrics.evaluation_protocol||rawMetrics.protocol||"未声明";
+  const anchorMetrics=rawMetrics.anchor_validation||rawMetrics.anchor_validation_metrics||rawMetrics.anchor_metrics||rawMetrics.fixed_test_metrics||{
+    R2: rawMetrics.anchor_r2,
+    RMSE: rawMetrics.anchor_rmse,
+    MAE: rawMetrics.anchor_mae,
+    MAPE: rawMetrics.anchor_mape
+  };
+  const anchorCards=["R2","RMSE","MAE","MAPE"].filter(k=>anchorMetrics[k]!==undefined||anchorMetrics[k.toLowerCase()]!==undefined).map(k=>`<div class="card"><div class="k">anchor ${esc(k)}</div><div class="v">${fmt(anchorMetrics[k]??anchorMetrics[k.toLowerCase()])}</div></div>`).join("");
+  const syntheticHtml=renderSyntheticSummary(synthetic, rawMetrics);
+  const used=mechanism.mechanism_used===true?"使用了机理模型":"未使用机理模型";
+  const mechanisms=(mechanism.mechanisms&&mechanism.mechanisms.length?mechanism.mechanisms:mechanism.considered_mechanisms||[]);
+  const mechRows=mechanisms.slice(0,5).map(m=>`<tr><td>${esc(m.name||"")}</td><td>${esc(m.paper_or_source||m.paper||"")}</td><td class="mono">${esc(m.exact_formula_or_relationship||m.formula||"")}</td><td>${esc(m.implementation_role||m.reason_not_used||"")}</td></tr>`).join("");
+  const candidateHtml=renderCandidateSummary(candidate);
+  const providerSummary=search.provider_summary||search.source_payload?.provider_summary||{};
+  const sourceTypeSummary=search.source_type_summary||search.source_payload?.source_type_summary||{};
+  const sourceQuality=search.source_quality||search.source_payload?.source_quality||{};
+  const relevanceSummary=sourceQuality.relevance_summary||{};
+  const providerText=Object.keys(providerSummary).length?Object.entries(providerSummary).map(([k,v])=>`${k}: ${v}`).join("；"):"暂无";
+  const sourceTypeText=Object.keys(sourceTypeSummary).length?Object.entries(sourceTypeSummary).map(([k,v])=>`${k}: ${v}`).join("；"):"暂无";
+  const relevanceText=Object.keys(relevanceSummary).length?Object.entries(relevanceSummary).map(([k,v])=>`${k}: ${v}`).join("；"):"暂无";
+  const sourceRows=snippets.slice(0,24).map((s,i)=>`<tr><td class="num">${esc(s.source_id||i+1)}</td><td>${esc(s.source_type||"web")}<br><span class="mono">${esc(s.provider||s.source||"")}</span></td><td>${esc(s.query||"")}</td><td><a href="${esc(s.link||s.url||"#")}" target="_blank" rel="noopener">${esc(s.title||"")}</a><div class="source-meta">相关度: ${esc(s.relevance_label||"N/A")} (${esc(s.relevance_score??"N/A")}/5) · ${esc(s.category||"")}</div><div class="source-meta">证据角色: ${esc(s.evidence_role||"")}</div></td><td>${esc(s.snippet||"")}</td></tr>`).join("");
+  const sourceHtml=snippets.length&&sourcesOpen?`<div class="summary"><b>来源类型</b>：${esc(sourceTypeText)}<br><b>Provider</b>：${esc(providerText)}<br><b>相关度</b>：${esc(relevanceText)}<br><span class="source-meta">${esc(sourceQuality.quality_rule||"")}</span></div><table class="table"><thead><tr><th>ID</th><th>来源</th><th>Query</th><th>论文/网页与相关度</th><th>摘要片段</th></tr></thead><tbody>${sourceRows}</tbody></table>`:`<div class="summary">外部搜索依据已收起，本次检索到 ${snippets.length} 条片段。来源类型：${esc(sourceTypeText)}；Provider：${esc(providerText)}；相关度：${esc(relevanceText)}</div>`;
+  const trainingHtml=trainingLog&&trainingOpen?`<div class="logblock">${esc(trainingLog)}</div>${repairLogs.length?`<div class="summary"><b>修复重试记录</b><br>${esc(repairLogs.join("\\n\\n").slice(0,5000))}</div>`:""}`:`<div class="summary">训练过程已收起。${trainingLog?"可展开查看脚本输出、候选评估、最终训练和测试过程。":"当前 run_result 中暂无训练输出。"}</div>`;
+  const tableHtml=rows.length&&predictionsOpen?`<table class="table"><thead><tr>${Object.keys(rows[0]).slice(0,7).map(k=>`<th>${esc(k)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${Object.keys(rows[0]).slice(0,7).map(k=>`<td class="${typeof r[k]==='number'?'num':''}">${esc(fmt(r[k]))}</td>`).join("")}</tr>`).join("")}</tbody></table>`:`<div class="summary">预测表已收起，当前预览可展开 ${rows.length} 行。</div>`;
+  box.innerHTML=`
+    ${controls}
+    <div class="summary"><b>运行目录</b><br><span class="mono">${esc(summary.run_dir)}</span><br><b>搜索状态</b>：${search.enabled?"已启用":"未启用"}，检索片段 ${esc((search.snippets||[]).length)} 条<br><b>结果状态</b>：${esc(resultStatus(summary))}<br><b>评估方式</b>：${esc(evalLabel)}</div>
+    <div class="cards">${metricCards||'<div class="card"><div class="k">metrics</div><div class="v">未生成</div></div>'}</div>
+    ${anchorCards?`<div class="cards">${anchorCards}</div>`:""}
+    ${syntheticHtml}
+    <div class="section-head"><h3>训练过程</h3><button class="toggle" onclick="toggleTraining()">${trainingOpen?"收起":"展开"}训练过程</button></div>
+    ${trainingHtml}
+    <div class="section-head"><h3>外部搜索依据</h3><button class="toggle" onclick="toggleSources()">${sourcesOpen?"收起":"展开"}搜索依据</button></div>
+    ${sourceHtml}
+    ${candidateHtml}
+    <h3>机理依据审计</h3>
+    <div class="summary"><b>${esc(used)}</b><br>${esc(mechanism.justification||"暂无说明")}</div>
+    ${mechRows?`<table class="table"><thead><tr><th>模型</th><th>论文/来源</th><th>公式/关系</th><th>用途或未使用原因</th></tr></thead><tbody>${mechRows}</tbody></table>`:""}
+    <div class="section-head"><h3>预测结果</h3><button class="toggle" onclick="togglePredictions()">${predictionsOpen?"收起":"展开"}预测表</button></div>
+    ${tableHtml}`;
+}
+function renderSyntheticSummary(synthetic, metrics){
+  const has=synthetic&&Object.keys(synthetic).length;
+  const secondary=metrics.secondary_evaluation||"";
+  if(!has&&secondary!=="anchor_validation") return "";
+  const source=synthetic.anchor_source||{};
+  const equations=synthetic.generation_equations||{};
+  const limitations=Array.isArray(synthetic.limitations)?synthetic.limitations:[];
+  return `<h3>合成数据与 Anchor 验证</h3>
+    <div class="summary">
+      <b>数据模式</b>：${esc(synthetic.dataset_kind||"未声明")}；<b>样本数</b>：${esc(synthetic.n_samples??"未声明")}；<b>secondary</b>：${esc(secondary||"未声明")}<br>
+      <b>锚点来源</b>：${esc(source.paper||"Materials 18, 2983 Table 6")} ${source.doi?`DOI: ${esc(source.doi)}`:""}<br>
+      <b>生成逻辑</b>：${esc(equations.yield_stress||"未展示")}<br>
+      <b>限制</b>：${esc(limitations.slice(0,3).join("；")||"未声明")}
+    </div>`;
+}
+function renderCandidateSummary(candidate){
+  const primitives=Array.isArray(candidate.model_primitives)?candidate.model_primitives:[];
+  const models=Array.isArray(candidate.candidate_models)?candidate.candidate_models:[];
+  const mechanisms=Array.isArray(candidate.candidate_mechanisms)?candidate.candidate_mechanisms:[];
+  const hybrids=Array.isArray(candidate.candidate_hybrid_strategies)?candidate.candidate_hybrid_strategies:[];
+  const selected=candidate.selected_combination||{};
+  if(!models.length&&!mechanisms.length) return `<h3>候选模型与候选机理</h3><div class="summary">暂无候选报告。下一次运行会在 SearchAgent 后生成 3-5 个候选模型和候选机理。</div>`;
+  const primitiveRows=primitives.slice(0,8).map(p=>`<tr><td>${esc(p.id||"")}</td><td>${esc(p.primitive||"")}</td><td>${esc(listText(p.source_ids_or_links))}</td><td>${esc(p.transferable_use_for_yield_stress||"")}</td></tr>`).join("");
+  const modelRows=models.slice(0,5).map(m=>{const nf=m.novelty_filter||{}; return `<tr><td>${esc(m.id||"")}</td><td>${esc(m.name||"")}<div class="candidate-line"><b>sources</b>: ${esc(listText(m.source_ids_or_links))}</div></td><td>${esc(m.family||"")}</td><td>${esc(m.modeling_idea||"")}<div class="candidate-line"><b>novelty</b>: ${esc(nf.accepted===false?"reject":"pass")} ${esc(nf.reason||"")}</div><div class="candidate-line"><b>not Skill1-5</b>: ${esc(m.why_not_skill_1_to_5_derivative||"")}</div></td><td class="num">${esc(m.feasibility_score_1_to_5??"")}</td></tr>`}).join("");
+  const mechRows=mechanisms.slice(0,5).map(m=>`<tr><td>${esc(m.id||"")}</td><td>${esc(m.name||"")}<div class="candidate-line"><b>sources</b>: ${esc(listText(m.source_ids_or_links))}</div></td><td class="mono">${esc(m.formula_or_relationship||"")}</td><td>${esc(m.applicability_to_current_data||"")}</td><td class="num">${esc(m.feasibility_score_1_to_5??"")}</td></tr>`).join("");
+  const hybridRows=hybrids.slice(0,6).map(h=>{const score=h.total_score_1_to_10??h.score_breakdown?.total_score_1_to_10??""; return `<tr><td>${esc(h.id||"")}${h.selected?`<div class="candidate-line"><b>selected</b></div>`:""}</td><td>${esc(h.name||"")}<div class="candidate-line"><b>model</b>: ${esc(h.model_id||"")}；<b>mechanisms</b>: ${esc(listText(h.mechanism_ids))}</div></td><td>${esc(h.combination_method||"")}<div class="candidate-line"><b>plan</b>: ${esc(h.implementation_plan||"")}</div></td><td>${esc(h.data_support||"")}<div class="candidate-line">${esc(h.data_support_reason||h.rejection_reason||"")}</div></td><td class="num">${esc(score)}</td></tr>`}).join("");
+  return `
+    <h3>候选模型与候选机理</h3>
+    <div class="summary"><b>推荐组合</b><br>策略：${esc(selected.strategy_id||"未选择")}；模型：${esc(selected.model_id||"未选择")}；机理：${esc((selected.mechanism_ids||[]).join(", ")||"无")}；是否实际用机理：${esc(selected.uses_mechanism??"未声明")}<br>${esc(selected.selection_rationale||"暂无选择理由")}<br><b>评估建议</b>：${esc(selected.evaluation_protocol||"未声明")}</div>
+    ${primitiveRows?`<div class="section-head"><h3>文献 Model Primitive</h3></div><table class="table"><thead><tr><th>ID</th><th>Primitive</th><th>source_id/link</th><th>迁移用途</th></tr></thead><tbody>${primitiveRows}</tbody></table>`:""}
+    <div class="section-head"><h3>候选模型</h3></div>
+    <table class="table"><thead><tr><th>ID</th><th>模型与来源</th><th>家族</th><th>建模思路与 novelty filter</th><th>可行性</th></tr></thead><tbody>${modelRows}</tbody></table>
+    <div class="section-head"><h3>候选机理</h3></div>
+    <table class="table"><thead><tr><th>ID</th><th>机理与来源</th><th>公式/关系</th><th>当前数据适用性</th><th>可行性</th></tr></thead><tbody>${mechRows}</tbody></table>
+    ${hybridRows?`<div class="section-head"><h3>模型+机理结合候选</h3></div><table class="table"><thead><tr><th>ID</th><th>组合</th><th>结合方式/实现计划</th><th>数据是否支持</th><th>评分</th></tr></thead><tbody>${hybridRows}</tbody></table>`:""}`;
+}
+function listText(v){if(Array.isArray(v)) return v.filter(x=>x!==undefined&&x!==null&&x!=="").join("；"); if(v&&typeof v==="object") return JSON.stringify(v); return String(v||"");}
+function fmt(v){return typeof v==="number"?(Math.abs(v)>=100?String(v.toFixed(2)):String(Number(v.toFixed(4)))):v}
+function normalizeMetrics(m){
+  if(!m||typeof m!=="object") return {};
+  if(m.R2!==undefined||m.RMSE!==undefined||m.MAE!==undefined) return {...m,__source:m.evaluation_protocol||m.protocol||"direct metrics"};
+  if(m.overall_metrics&&typeof m.overall_metrics==="object") return {R2:m.overall_metrics.R2??m.overall_metrics.r2,RMSE:m.overall_metrics.RMSE??m.overall_metrics.rmse,MAE:m.overall_metrics.MAE??m.overall_metrics.mae,MAPE:m.overall_metrics.MAPE??m.overall_metrics.mape,__source:m.evaluation_protocol||"overall cross-validation metrics"};
+  if(m.OOF_R2!==undefined||m.OOF_RMSE!==undefined||m.OOF_MAE!==undefined) return {R2:m.OOF_R2,RMSE:m.OOF_RMSE,MAE:m.OOF_MAE,MAPE:m.OOF_MAPE,__source:m.evaluation_protocol||"OOF / cross-validation"};
+  if(m.cv_oof&&typeof m.cv_oof==="object") return {...m.cv_oof,__source:m.evaluation_protocol||"OOF / cross-validation"};
+  if(m.test_holdout&&typeof m.test_holdout==="object") return {...m.test_holdout,__source:m.evaluation_protocol||"holdout test"};
+  return {...m,__source:m.evaluation_protocol||m.protocol||"custom metrics"};
+}
+function metricLabel(k, raw){
+  if(raw&&raw["OOF_"+k]!==undefined) return "OOF_"+k;
+  return k;
+}
+function resultStatus(summary){
+  const r=summary.run_result||{};
+  if(r.rcode===0) return "已完成";
+  if(r.rcode===2) return "外部搜索无结果，已停止";
+  if(r.rcode!==undefined) return "未通过，rcode="+r.rcode;
+  return "未知";
+}
+async function loadHistory(){
+  if(historyLoaded) return;
+  historyLoaded=true;
+  const events=await fetch(`/api/events?limit=${MAX_HISTORY_EVENTS}`).then(r=>r.json()).catch(err=>{
+    addMsg("system",`历史消息加载失败：${err&&err.message?err.message:err}`);
+    return [];
+  });
+  if(Array.isArray(events)&&events.length){
+    chat.innerHTML=""; count=0; eventKeys.clear(); agentCounts={}; currentStage="INIT";
+    if(events.length>=MAX_HISTORY_EVENTS){
+      addMsg("system",`已加载最近 ${events.length} 条历史消息；更早日志不在刷新时重放，避免页面卡住。`,{history:true});
+    }
+    events.forEach(ev=>handleEvent(ev,{history:true}));
+  }
+  await loadPredictions();
+  const status=await fetch("/api/status").then(r=>r.json()).catch(()=>({running:false}));
+  running=!!status.running;
+  document.getElementById("badge").textContent=running?"运行中":(currentStage==="END"?"已完成":"待运行");
+  document.getElementById("run").textContent=running?"运行中...":(currentStage==="END"?"重新运行":"开始运行");
+  document.getElementById("stop").style.display=running?"block":"none";
+  document.getElementById("thinking").classList.toggle("active",running);
+}
+document.getElementById("show-system").addEventListener("change",async()=>{
+  historyLoaded=false;
+  chat.innerHTML=""; count=0; eventKeys.clear(); agentCounts={}; currentStage="INIT";
+  await loadHistory();
+});
+renderAgents();
+renderStages();
+renderSummary();
+loadHistory();
+connectEvents();
+</script>
+</body>
+</html>
