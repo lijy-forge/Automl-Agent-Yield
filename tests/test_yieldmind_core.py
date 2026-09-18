@@ -648,7 +648,11 @@ class _FakeCompletions:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return SimpleNamespace(choices=[SimpleNamespace(message=self._messages.pop(0))])
+        message = self._messages.pop(0)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=getattr(message, "response_usage", None),
+        )
 
 
 def _fake_client(messages: list[SimpleNamespace]) -> SimpleNamespace:
@@ -694,12 +698,142 @@ def test_function_calling_roundtrip_returns_tool_result_to_model(tmp_path: Path)
     assert result.llm_calls == 0
     assert result.simulated_model_calls == 2
     assert result.final_answer == "The payload was redacted by the validated tool."
+    assert result.stop_reason == "final_answer"
+    assert result.requested_tool_calls == 1
+    assert result.executed_tool_calls == 1
+    assert result.repeated_tool_calls == 0
+    assert [step["outcome"] for step in result.steps] == ["tools_returned", "final_answer"]
     assert len(client.chat.completions.calls) == 2
     final_messages = client.chat.completions.calls[1]["messages"]
     tool_messages = [message for message in final_messages if message["role"] == "tool"]
     assert tool_messages[0]["tool_call_id"] == "call_1"
     assert "sk-test-secret" not in tool_messages[0]["content"]
+    assert client.chat.completions.calls[1]["tool_choice"] == "auto"
+
+
+def test_agent_loop_supports_multiple_tool_rounds_and_step_trace(tmp_path: Path) -> None:
+    first = _tool_message(
+        "redact_sensitive_payload",
+        '{"payload":{"Authorization":"Bearer sk-test-secret"}}',
+        call_id="call_1",
+    )
+    second = _tool_message(
+        "plan_token_budget",
+        '{"max_input_tokens":400,"reserved_output_tokens":100,"sections":[{"name":"constraints","text":"keep evidence","required":true,"priority":100}]}',
+        call_id="call_2",
+    )
+    third = SimpleNamespace(
+        content="The payload was redacted and the token budget was applied.",
+        tool_calls=[],
+        response_usage=SimpleNamespace(prompt_tokens=120, completion_tokens=18, total_tokens=138),
+    )
+    client = _fake_client([first, second, third])
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    result = execute_plan(
+        ToolPlanRequest(prompt="Redact and budget the context", allow_live_llm=True, max_steps=4),
+        registry=ToolRegistry(store=store),
+        store=store,
+        client=client,
+        simulated_test_adapter=True,
+    )
+
+    assert result.passed is True
+    assert result.simulated_model_calls == 3
+    assert result.requested_tool_calls == 2
+    assert result.executed_tool_calls == 2
+    assert result.stop_reason == "final_answer"
+    assert result.token_usage == {
+        "prompt_tokens": 120,
+        "completion_tokens": 18,
+        "total_tokens": 138,
+        "reported_steps": 1,
+    }
+    assert [step["outcome"] for step in result.steps] == ["tools_returned", "tools_returned", "final_answer"]
+    assert result.run_id
+    loop_events = [event for event in store.list_events(result.run_id) if event["stage"] == "agent_loop_step"]
+    assert len(loop_events) == 3
+    final_messages = client.chat.completions.calls[2]["messages"]
+    assert [message["name"] for message in final_messages if message["role"] == "tool"] == [
+        "redact_sensitive_payload",
+        "plan_token_budget",
+    ]
+
+
+def test_agent_loop_reuses_duplicate_then_stops_repeated_cycle(tmp_path: Path) -> None:
+    repeated_args = '{"payload":{"value":"same"}}'
+    client = _fake_client(
+        [
+            _tool_message("redact_sensitive_payload", repeated_args, call_id="call_1"),
+            _tool_message("redact_sensitive_payload", repeated_args, call_id="call_2"),
+            _tool_message("redact_sensitive_payload", repeated_args, call_id="call_3"),
+        ]
+    )
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    result = execute_plan(
+        ToolPlanRequest(
+            prompt="Repeat the same call",
+            allow_live_llm=True,
+            max_steps=4,
+            max_tool_calls=4,
+            max_repeated_tool_calls=1,
+        ),
+        registry=ToolRegistry(store=store),
+        store=store,
+        client=client,
+        simulated_test_adapter=True,
+    )
+
+    assert result.passed is False
+    assert result.stop_reason == "repeated_tool_call_limit"
+    assert result.requested_tool_calls == 3
+    assert result.executed_tool_calls == 1
+    assert result.repeated_tool_calls == 2
+    assert result.results[1]["duplicate_reused"] is True
+    assert result.steps[-1]["outcome"] == "duplicate_limit_exceeded"
+    with connect(store.db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) AS count FROM yieldmind_tool_calls").fetchone()["count"]
+    assert count == 1
+
+
+def test_agent_loop_uses_answer_only_call_after_tool_budget_is_spent(tmp_path: Path) -> None:
+    first = _tool_message("redact_sensitive_payload", '{"payload":{"value":"once"}}', call_id="call_1")
+    second = SimpleNamespace(content="Finished within the tool-call budget.", tool_calls=[])
+    client = _fake_client([first, second])
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    result = execute_plan(
+        ToolPlanRequest(prompt="Use one tool", allow_live_llm=True, max_steps=3, max_tool_calls=1),
+        registry=ToolRegistry(store=store),
+        store=store,
+        client=client,
+        simulated_test_adapter=True,
+    )
+
+    assert result.passed is True
+    assert result.stop_reason == "final_answer"
+    assert result.requested_tool_calls == 1
     assert client.chat.completions.calls[1]["tool_choice"] == "none"
+
+
+def test_agent_loop_stops_when_max_steps_are_exhausted(tmp_path: Path) -> None:
+    client = _fake_client(
+        [
+            _tool_message("redact_sensitive_payload", '{"payload":{"value":"first"}}', call_id="call_1"),
+            _tool_message("redact_sensitive_payload", '{"payload":{"value":"second"}}', call_id="call_2"),
+        ]
+    )
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    result = execute_plan(
+        ToolPlanRequest(prompt="Keep calling tools", allow_live_llm=True, max_steps=2, max_tool_calls=4),
+        registry=ToolRegistry(store=store),
+        store=store,
+        client=client,
+        simulated_test_adapter=True,
+    )
+
+    assert result.passed is False
+    assert result.stop_reason == "max_steps_exhausted"
+    assert result.executed_tool_calls == 2
+    assert len(result.steps) == 2
 
 
 def test_workflow_runs_with_local_fallback(tmp_path: Path) -> None:

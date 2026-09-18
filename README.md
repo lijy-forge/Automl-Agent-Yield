@@ -99,10 +99,13 @@ keeps `transformers==4.40.2`; Qwen3 runs behind the isolated loopback service
 described below.
 
 Live Function Calling validates every model-selected tool and argument object
-against the Tool Registry before execution. Tool results are redacted, returned
-to the model with their `tool_call_id`, and followed by a second constrained
-answer call. Injected protocol-test clients are recorded as simulated calls,
-never as real model calls.
+against the Tool Registry before execution. The bounded loop can select more
+tools after seeing redacted results, subject to total step and tool-call
+budgets. Canonical tool-call fingerprints reuse identical results without
+repeating side effects, and persistent repetition terminates with an explicit
+reason. Every step records its outcome, tool fingerprints, counters, stop
+reason, and provider-reported token usage when available. Injected protocol-test
+clients are recorded as simulated calls, never as real model calls.
 
 Qwen3 Embedding runs in a separate Python environment because its required
 `tokenizers>=0.21` conflicts with Chroma 0.5.23 in the main environment. The
