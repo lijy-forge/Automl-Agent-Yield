@@ -1,0 +1,186 @@
+{
+  "version": "yieldmind-retrieval-cases-v1",
+  "label_scope": "Repository behavior and domain constraints, manually labeled by source document.",
+  "cases": [
+    {
+      "id": "mechanism_yodel",
+      "query": "YODEL phi phi_m contact network dense suspension",
+      "expected_source_paths": ["rheology_mechanisms.md"],
+      "expected_terms": ["yodel", "phi_m"]
+    },
+    {
+      "id": "mechanism_lian",
+      "query": "Lian Phi SP_percent Tau0_Pa effective packing state",
+      "expected_source_paths": ["rheology_mechanisms.md"],
+      "expected_terms": ["lian", "sp_percent"]
+    },
+    {
+      "id": "mechanism_hidden_variable",
+      "query": "hidden physical variable phi_m m1_eff validity diagnostics",
+      "expected_source_paths": ["rheology_mechanisms.md"],
+      "expected_terms": ["hidden", "m1_eff"]
+    },
+    {
+      "id": "mechanism_alternatives",
+      "query": "Bingham Herschel-Bulkley Casson thixotropic candidate relations",
+      "expected_source_paths": ["rheology_mechanisms.md"],
+      "expected_terms": ["bingham", "casson"]
+    },
+    {
+      "id": "mechanism_claim_boundary",
+      "query": "一个看起来合理的物理公式是否足以证明模型预测有提升",
+      "expected_source_paths": ["rheology_mechanisms.md"],
+      "expected_terms": ["plausible", "ablation"]
+    },
+    {
+      "id": "data_supported_layouts",
+      "query": "Lian Zhou supported column layouts Phi d_s_um powder",
+      "expected_source_paths": ["data_contract_and_leakage.md"],
+      "expected_terms": ["zhou", "d_s_um"]
+    },
+    {
+      "id": "data_leakage_denylist",
+      "query": "target leakage denylist phi_max m1_true m1_lf",
+      "expected_source_paths": ["data_contract_and_leakage.md"],
+      "expected_terms": ["denylist", "m1_true"]
+    },
+    {
+      "id": "data_split_preprocessing",
+      "query": "fit scaling imputation only on training fold prevent leakage",
+      "expected_source_paths": ["data_contract_and_leakage.md"],
+      "expected_terms": ["training fold", "leaks"]
+    },
+    {
+      "id": "data_units_schema",
+      "query": "target unit numeric coercion missingness unsupported schema",
+      "expected_source_paths": ["data_contract_and_leakage.md"],
+      "expected_terms": ["unit", "missingness"]
+    },
+    {
+      "id": "data_distribution_shift",
+      "query": "新配方和不同生产批次上线前应该怎样设计留出验证以检查分布漂移",
+      "expected_source_paths": ["data_contract_and_leakage.md"],
+      "expected_terms": ["grouped", "formulation"]
+    },
+    {
+      "id": "eval_oof",
+      "query": "为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置",
+      "expected_source_paths": ["evaluation_and_ablation.md"],
+      "expected_terms": ["out-of-fold", "seed"]
+    },
+    {
+      "id": "eval_metrics",
+      "query": "RMSE MAE R2 negative held-out metric interpretation",
+      "expected_source_paths": ["evaluation_and_ablation.md"],
+      "expected_terms": ["rmse", "negative"]
+    },
+    {
+      "id": "eval_fixed_baseline",
+      "query": "run_fixed_baseline_eval deterministic reference normalized schema",
+      "expected_source_paths": ["evaluation_and_ablation.md"],
+      "expected_terms": ["run_fixed_baseline_eval", "reference"]
+    },
+    {
+      "id": "eval_candidate_benchmark",
+      "query": "run_candidate_benchmark selection audit compare folds",
+      "expected_source_paths": ["evaluation_and_ablation.md"],
+      "expected_terms": ["run_candidate_benchmark", "selection audit"]
+    },
+    {
+      "id": "eval_ablation",
+      "query": "with_mechanism without_mechanism delta RMSE delta R2 same folds",
+      "expected_source_paths": ["evaluation_and_ablation.md"],
+      "expected_terms": ["with_mechanism", "delta rmse"]
+    },
+    {
+      "id": "evidence_identity",
+      "query": "stable chunk_id text_hash document_version index_version citation",
+      "expected_source_paths": ["evidence_and_index_governance.md"],
+      "expected_terms": ["chunk_id", "text_hash"]
+    },
+    {
+      "id": "evidence_semantic_support",
+      "query": "引用编号存在就代表生成结论一定被原文支持吗，还需要什么检查",
+      "expected_source_paths": ["evidence_and_index_governance.md"],
+      "expected_terms": ["semantically", "human"]
+    },
+    {
+      "id": "evidence_embedding_profile",
+      "query": "embedding model revision dimension normalization metric profile isolation",
+      "expected_source_paths": ["evidence_and_index_governance.md"],
+      "expected_terms": ["dimension", "collection"]
+    },
+    {
+      "id": "evidence_lifecycle",
+      "query": "document hash idempotent delete metadata vectors retrieval",
+      "expected_source_paths": ["evidence_and_index_governance.md"],
+      "expected_terms": ["idempotent", "deleted"]
+    },
+    {
+      "id": "evidence_metrics",
+      "query": "Recall at k mean reciprocal rank citation accuracy latency",
+      "expected_source_paths": ["evidence_and_index_governance.md"],
+      "expected_terms": ["reciprocal", "latency"]
+    },
+    {
+      "id": "safety_argv",
+      "query": "argument vector avoid shell true metacharacters",
+      "expected_source_paths": ["execution_and_safety.md"],
+      "expected_terms": ["argument vector", "shell=true"]
+    },
+    {
+      "id": "safety_docker",
+      "query": "Docker sandbox network disabled CPU memory pids API keys",
+      "expected_source_paths": ["execution_and_safety.md"],
+      "expected_terms": ["networking disabled", "api keys"]
+    },
+    {
+      "id": "safety_cancel",
+      "query": "用户取消长时间运行任务后，怎样确保它启动的子进程也一起退出",
+      "expected_source_paths": ["execution_and_safety.md"],
+      "expected_terms": ["process group", "descendants"]
+    },
+    {
+      "id": "safety_redaction",
+      "query": "redact authorization api keys passwords database URLs email phone",
+      "expected_source_paths": ["execution_and_safety.md"],
+      "expected_terms": ["authorization", "encryption"]
+    },
+    {
+      "id": "safety_task_state",
+      "query": "PostgreSQL Redis Celery lease heartbeat manual recovery high availability",
+      "expected_source_paths": ["execution_and_safety.md"],
+      "expected_terms": ["heartbeat", "high availability"]
+    },
+    {
+      "id": "agent_stategraph",
+      "query": "LangGraph domain workflow explicit nodes conditional edges revision cancellation",
+      "expected_source_paths": ["agent_orchestration.md"],
+      "expected_terms": ["conditional edges", "cancellation"]
+    },
+    {
+      "id": "agent_multi_role",
+      "query": "迁移到图编排后原来的多个智能体职责是否仍然保留，价值体现在哪里",
+      "expected_source_paths": ["agent_orchestration.md"],
+      "expected_terms": ["role separation", "model calls"]
+    },
+    {
+      "id": "agent_tool_registry",
+      "query": "Tool Registry Pydantic schema invalid parameters unknown tools",
+      "expected_source_paths": ["agent_orchestration.md"],
+      "expected_terms": ["pydantic", "invalid parameters"]
+    },
+    {
+      "id": "agent_offline_live",
+      "query": "offline rule planner real Function Calling allow_live_llm model counts",
+      "expected_source_paths": ["agent_orchestration.md"],
+      "expected_terms": ["allow_live_llm=true", "simulated"]
+    },
+    {
+      "id": "agent_retry_budget",
+      "query": "bounded local repair replan tool calling termination budget",
+      "expected_source_paths": ["agent_orchestration.md"],
+      "expected_terms": ["bounded", "terminal"]
+    }
+  ]
+}

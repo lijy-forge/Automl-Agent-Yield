@@ -46,8 +46,19 @@ def execute_script(script_name, work_dir = ".", device="0"):
         existing_pythonpath = os.environ.get("PYTHONPATH", "")
         if existing_pythonpath:
             pythonpath = f"{pythonpath}{os.pathsep}{existing_pythonpath}"
-        cmd = f"PYTHONPATH={pythonpath} CUDA_VISIBLE_DEVICES={device} {python_executable} -u {script_path}"
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True, cwd=work_dir)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = pythonpath
+        env["CUDA_VISIBLE_DEVICES"] = str(device)
+        cmd = [python_executable, "-u", script_path]
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=False,
+            cwd=work_dir,
+            env=env,
+        )
 
         stdout_lines = []
         stderr_lines = []

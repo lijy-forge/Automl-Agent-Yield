@@ -1,5 +1,15 @@
 openai==1.30.2
 httpx<0.28
+pydantic>=2.0
+fastapi>=0.110
+uvicorn>=0.27
+SQLAlchemy==2.0.49
+alembic==1.18.4
+psycopg[binary]==3.2.10
+redis==5.2.1
+celery==5.4.0
+langgraph-checkpoint-postgres==2.0.25
+psycopg-pool==3.3.1
 requests==2.32.2
 beautifulsoup4==4.12.3
 google_search_results==2.4.2
@@ -22,8 +32,11 @@ torch==2.2.1
 gradio==4.31.5
 
 langchain==0.2.1
+langgraph<0.3
 langchain_community==0.2.1
 langchain_text_splitters==0.2.0
+chromadb<0.6
+posthog==4.8.0
 arxivloader==1.0.2
 huggingface_hub==0.22.2
 sentence-transformers==2.7.0
