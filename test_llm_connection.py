@@ -4,7 +4,7 @@ import sys
 from configs import AVAILABLE_LLMs, DEFAULT_LLM, PARSER_LLM
 
 
-def test_client(name: str):
+def check_client(name: str):
     cfg = AVAILABLE_LLMs[name]
     kwargs = {"api_key": cfg["api_key"]}
     if "base_url" in cfg:
@@ -25,13 +25,13 @@ def main():
     if len(sys.argv) > 1:
         for name in sys.argv[1:]:
             print(f"TEST_LLM={name}")
-            test_client(name)
+            check_client(name)
         return
     print(f"DEFAULT_LLM={DEFAULT_LLM}")
     print(f"PARSER_LLM={PARSER_LLM}")
-    test_client(DEFAULT_LLM)
+    check_client(DEFAULT_LLM)
     if PARSER_LLM != DEFAULT_LLM:
-        test_client(PARSER_LLM)
+        check_client(PARSER_LLM)
 
 
 if __name__ == "__main__":

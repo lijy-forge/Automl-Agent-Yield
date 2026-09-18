@@ -1,0 +1,5 @@
+# Isolated CPU embedding environment. Do not install into the main amla env.
+numpy==1.26.4
+torch==2.2.1
+transformers==4.51.3
+sentence-transformers==4.1.0

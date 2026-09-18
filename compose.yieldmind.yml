@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: yieldmind
+      POSTGRES_USER: yieldmind
+      POSTGRES_PASSWORD: ${YIELDMIND_POSTGRES_PASSWORD:-yieldmind_dev_only}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - yieldmind_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yieldmind -d yieldmind"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${YIELDMIND_REDIS_PASSWORD:-yieldmind_redis_dev_only}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - yieldmind_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$YIELDMIND_REDIS_PASSWORD ping | grep PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    environment:
+      YIELDMIND_REDIS_PASSWORD: ${YIELDMIND_REDIS_PASSWORD:-yieldmind_redis_dev_only}
+    restart: unless-stopped
+
+volumes:
+  yieldmind_postgres_data:
+  yieldmind_redis_data:

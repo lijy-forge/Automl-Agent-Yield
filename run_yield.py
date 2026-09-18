@@ -19,7 +19,7 @@ import signal
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -55,6 +55,7 @@ from knowledge.yield_retriever import build_yield_query_plan, retrieve_yield_sou
 from operation_agent import OperationAgent
 from operation_agent.yield_guardrails import verify_yield_plugin_harness_run
 from utils import _emit_event, get_client
+from yieldmind.process_control import run_managed_process
 
 
 def _now_id() -> str:
@@ -165,14 +166,13 @@ def _chat_completion_content_with_process_timeout(
 
 
 def _operation_agent_worker(
-    result_queue,
     user_requirements: dict[str, Any],
     llm: str,
     code_path: str,
     task: str,
     instructions: str,
     n_attempts: int,
-) -> None:
+) -> dict[str, Any]:
     try:
         op = OperationAgent(
             user_requirements=user_requirements,
@@ -180,25 +180,19 @@ def _operation_agent_worker(
             code_path=code_path,
             task=task,
         )
-        result = op.implement_solution(
+        return op.implement_solution(
             instructions,
             full_pipeline=False,
             n_attempts=max(1, int(n_attempts)),
         )
-        result_queue.put({"ok": True, "result": result})
     except Exception as exc:
-        result_queue.put(
-            {
-                "ok": False,
-                "result": {
-                    "rcode": 1,
-                    "stage": "operation",
-                    "action_result": f"OperationAgent failed before producing runnable code: {type(exc).__name__}: {exc}",
-                    "code": "",
-                    "error_logs": [f"OperationAgent exception: {type(exc).__name__}: {exc}"],
-                },
-            }
-        )
+        return {
+            "rcode": 1,
+            "stage": "operation",
+            "action_result": f"OperationAgent failed before producing runnable code: {type(exc).__name__}: {exc}",
+            "code": "",
+            "error_logs": [f"OperationAgent exception: {type(exc).__name__}: {exc}"],
+        }
 
 
 def _run_operation_agent_with_process_timeout(
@@ -208,48 +202,54 @@ def _run_operation_agent_with_process_timeout(
     task: str,
     instructions: str,
     n_attempts: int,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     timeout_seconds = _operation_timeout_seconds()
-    ctx = mp.get_context("spawn")
-    result_queue = ctx.Queue()
-    proc = ctx.Process(
-        target=_operation_agent_worker,
-        args=(result_queue, user_requirements, llm, code_path, task, instructions, n_attempts),
+    outcome = run_managed_process(
+        _operation_agent_worker,
+        (user_requirements, llm, code_path, task, instructions, n_attempts),
+        timeout_seconds=timeout_seconds,
+        cancel_check=cancel_check,
     )
-    proc.daemon = True
-    proc.start()
-    proc.join(timeout_seconds)
-    if proc.is_alive():
-        proc.terminate()
-        proc.join(5)
-        if proc.is_alive() and hasattr(proc, "kill"):
-            proc.kill()
-            proc.join(2)
+    process_control = outcome.metadata()
+    if outcome.status == "cancelled":
+        return {
+            "rcode": 130,
+            "stage": "operation",
+            "action_result": "OperationAgent was cancelled while generated code was running.",
+            "code": "",
+            "error_logs": ["OperationAgent cancellation requested; managed process group was stopped."],
+            "cancelled": True,
+            "timed_out": False,
+            "process_control": process_control,
+        }
+    if outcome.status == "timed_out":
         return {
             "rcode": 1,
             "stage": "operation",
             "action_result": f"OperationAgent timed out after {timeout_seconds:.0f}s before completing generated-code execution.",
             "code": "",
-            "error_logs": [f"OperationAgent timeout after {timeout_seconds:.0f}s."],
+            "error_logs": [f"OperationAgent timeout after {timeout_seconds:.0f}s; managed process group was stopped."],
+            "cancelled": False,
+            "timed_out": True,
+            "process_control": process_control,
         }
-    try:
-        result = result_queue.get_nowait()
-    except queue.Empty:
-        return {
-            "rcode": 1,
-            "stage": "operation",
-            "action_result": "OperationAgent process exited without returning a result.",
-            "code": "",
-            "error_logs": ["OperationAgent process exited without result."],
-        }
-    if isinstance(result, dict) and isinstance(result.get("result"), dict):
-        return result["result"]
+    if outcome.ok and isinstance(outcome.value, dict):
+        result = dict(outcome.value)
+        result["process_control"] = process_control
+        result.setdefault("cancelled", False)
+        result.setdefault("timed_out", False)
+        return result
+    error = outcome.error or "OperationAgent process exited without returning a valid result."
     return {
         "rcode": 1,
         "stage": "operation",
-        "action_result": "OperationAgent returned an invalid result payload.",
+        "action_result": error,
         "code": "",
-        "error_logs": ["OperationAgent returned invalid result payload."],
+        "error_logs": [error],
+        "cancelled": False,
+        "timed_out": False,
+        "process_control": process_control,
     }
 
 
@@ -2881,8 +2881,14 @@ def parse_args() -> argparse.Namespace:
 class YieldAgentManager:
     """Yield-specific manager that preserves the multi-agent control flow."""
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ):
         self.args = args
+        self.cancel_check = cancel_check
         self.run_dir = Path(args.run_dir)
         self.state = "INIT"
         self.stage_records: list[dict[str, Any]] = []
@@ -4068,19 +4074,22 @@ class YieldAgentManager:
                         mirror=False)
         return op_result
 
-    def _run_operation_agent(self) -> dict[str, Any]:
-        self._transition("PRE_EXEC", "AgentManager building operation contract and checking readiness.")
-        self.operation_instructions = self._build_operation_instructions()
-        review = self._pre_execution_review()
-        if not review["passed"]:
-            return {
-                "rcode": 3,
-                "stage": "pre_execution_review",
-                "action_result": "AgentManager blocked OperationAgent because pre-execution review failed.",
-                "code": "",
-                "error_logs": [json.dumps(review, ensure_ascii=False)],
-                "pre_execution_review": review,
-            }
+    def _run_operation_agent(self, *, skip_pre_execution_review: bool = False) -> dict[str, Any]:
+        if not skip_pre_execution_review:
+            self._transition("PRE_EXEC", "AgentManager building operation contract and checking readiness.")
+            self.operation_instructions = self._build_operation_instructions()
+            review = self._pre_execution_review()
+            if not review["passed"]:
+                return {
+                    "rcode": 3,
+                    "stage": "pre_execution_review",
+                    "action_result": "AgentManager blocked OperationAgent because pre-execution review failed.",
+                    "code": "",
+                    "error_logs": [json.dumps(review, ensure_ascii=False)],
+                    "pre_execution_review": review,
+                }
+        elif not self.operation_instructions.strip():
+            raise RuntimeError("Operation instructions must be prepared before skipping pre-execution review.")
 
         _exec_mode = os.environ.get("YIELD_EXECUTION_MODE", "free_search").strip().lower()
         if _exec_mode == "free_search":
@@ -4097,6 +4106,7 @@ class YieldAgentManager:
             "yield_stress_regression",
             self.operation_instructions,
             max(1, int(self.args.operation_attempts)),
+            cancel_check=self.cancel_check,
         )
         error_text = "\n".join(str(item) for item in (result.get("error_logs", []) or []))
         action_text = str(result.get("action_result") or "")

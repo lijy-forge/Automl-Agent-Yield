@@ -1,0 +1,196 @@
+{
+  "version": "yieldmind-offline-cases-v1",
+  "planner_cases": [
+    {
+      "name": "baseline_prompt_routes_to_baseline",
+      "prompt": "请对 demo 数据做 baseline 评测",
+      "expected_tools": ["generate_demo_yield_data", "run_fixed_baseline_eval"]
+    },
+    {
+      "name": "profile_prompt_routes_to_profile",
+      "prompt": "读取数据并做 schema/profile 画像",
+      "expected_tools": ["generate_demo_yield_data", "profile_yield_data"]
+    },
+    {
+      "name": "sandbox_prompt_routes_to_sandbox",
+      "prompt": "检查工具执行隔离 sandbox",
+      "expected_tools": ["generate_demo_yield_data", "run_sandboxed_python"]
+    },
+    {
+      "name": "knowledge_prompt_routes_to_search",
+      "prompt": "检索文献证据并给出引用",
+      "expected_tools": ["generate_demo_yield_data", "search_knowledge"]
+    },
+    {
+      "name": "candidate_prompt_routes_to_benchmark",
+      "prompt": "对候选机理和模型策略做 benchmark 方案评估",
+      "expected_tools": ["generate_demo_yield_data", "run_candidate_benchmark"]
+    },
+    {
+      "name": "report_prompt_routes_to_report",
+      "prompt": "生成 report summary 汇总本次 YieldMind 结果",
+      "expected_tools": ["generate_demo_yield_data", "build_run_report"]
+    },
+    {
+      "name": "redaction_prompt_routes_to_safety_tool",
+      "prompt": "脱敏 Authorization、api_key 和邮箱后再写日志",
+      "expected_tools": ["generate_demo_yield_data", "redact_sensitive_payload"]
+    },
+    {
+      "name": "budget_prompt_routes_to_budget_tool",
+      "prompt": "控制上下文 token budget，优先保留 constraints 和 evidence",
+      "expected_tools": ["generate_demo_yield_data", "plan_token_budget"]
+    },
+    {
+      "name": "evidence_validation_prompt_routes_to_validator",
+      "prompt": "校验证据引用 chunk_id、text_hash 和 index_version",
+      "expected_tools": ["generate_demo_yield_data", "search_knowledge", "validate_evidence_refs"]
+    },
+    {
+      "name": "combined_analysis_prompt_routes_to_multi_tools",
+      "prompt": "对 demo 数据做 baseline 和 candidate benchmark，并生成报告",
+      "expected_tools": ["generate_demo_yield_data", "run_fixed_baseline_eval", "run_candidate_benchmark", "build_run_report"],
+      "max_tool_calls": 8
+    },
+    {
+      "name": "isolation_and_eval_prompt_routes_to_sandbox_and_baseline",
+      "prompt": "隔离执行 sandbox，并 evaluate baseline",
+      "expected_tools": ["generate_demo_yield_data", "run_sandboxed_python", "run_fixed_baseline_eval"],
+      "max_tool_calls": 8
+    },
+    {
+      "name": "rag_budget_prompt_routes_to_search_and_budget",
+      "prompt": "RAG 检索文献证据，同时压缩上下文预算",
+      "expected_tools": ["generate_demo_yield_data", "search_knowledge", "plan_token_budget"],
+      "max_tool_calls": 8
+    }
+  ],
+  "retrieval_cases": [
+    {
+      "query": "YODEL maximum packing density phi_m yield stress",
+      "expected_terms": ["yodel", "packing"]
+    },
+    {
+      "query": "dense suspensions contact network yield stress mechanism",
+      "expected_terms": ["dense", "contact"]
+    },
+    {
+      "query": "mechanism ablation delta RMSE delta R2",
+      "expected_terms": ["ablation", "delta"]
+    },
+    {
+      "query": "evidence chunks source paths document versions index versions",
+      "expected_terms": ["chunk", "versions"]
+    },
+    {
+      "query": "semantic truth human review for cited claim",
+      "expected_terms": ["semantic", "human"]
+    },
+    {
+      "query": "generated model physics mechanism improves prediction",
+      "expected_terms": ["mechanism", "prediction"]
+    }
+  ],
+  "redaction_cases": [
+    {
+      "name": "redact_header_email_and_api_key",
+      "payload": {
+        "Authorization": "Bearer sk-case1234567890",
+        "contact": "ops@example.com",
+        "metadata": {"api_key": "sk-inner1234567890"}
+      },
+      "forbidden_terms": ["sk-case1234567890", "ops@example.com", "sk-inner1234567890"],
+      "min_redactions": 3
+    },
+    {
+      "name": "redact_database_url_and_password",
+      "payload": {
+        "database_url": "postgresql://user:pass@localhost:5432/yieldmind",
+        "password": "plain-password"
+      },
+      "forbidden_terms": ["postgresql://user:pass", "plain-password"],
+      "min_redactions": 2
+    },
+    {
+      "name": "redact_nested_phone_and_token",
+      "payload": {
+        "owner": {"phone": "+1 415 555 0189", "notes": "call +86 138 0013 8000"},
+        "token": "abc1234567890"
+      },
+      "forbidden_terms": ["+1 415 555 0189", "+86 138 0013 8000", "abc1234567890"],
+      "min_redactions": 3
+    },
+    {
+      "name": "clean_payload_has_no_redactions",
+      "payload": {"project": "YieldMind", "status": "offline eval"},
+      "forbidden_terms": [],
+      "min_redactions": 0
+    }
+  ],
+  "budget_cases": [
+    {
+      "name": "keep_constraints_and_evidence_drop_history",
+      "request": {
+        "max_input_tokens": 140,
+        "reserved_output_tokens": 20,
+        "sections": [
+          {"name": "constraints", "text": "target=tau0", "tokens": 50, "required": true, "priority": 100},
+          {"name": "evidence", "text": "retrieved evidence", "tokens": 60, "priority": 80},
+          {"name": "old_history", "text": "older turns", "tokens": 90, "priority": 5}
+        ]
+      },
+      "expected_selected": ["constraints", "evidence"],
+      "expected_dropped": ["old_history"],
+      "expect_ok": true,
+      "expected_over_budget": false
+    },
+    {
+      "name": "priority_order_keeps_high_priority_optional",
+      "request": {
+        "max_input_tokens": 100,
+        "reserved_output_tokens": 10,
+        "sections": [
+          {"name": "constraints", "text": "must keep", "tokens": 30, "required": true, "priority": 100},
+          {"name": "recent_turn", "text": "recent user correction", "tokens": 40, "priority": 90},
+          {"name": "older_context", "text": "older context", "tokens": 50, "priority": 10}
+        ]
+      },
+      "expected_selected": ["constraints", "recent_turn"],
+      "expected_dropped": ["older_context"],
+      "expect_ok": true,
+      "expected_over_budget": false
+    },
+    {
+      "name": "optional_section_can_be_clipped",
+      "request": {
+        "max_input_tokens": 115,
+        "reserved_output_tokens": 15,
+        "min_section_tokens": 20,
+        "sections": [
+          {"name": "constraints", "text": "required constraints", "tokens": 45, "required": true, "priority": 100},
+          {"name": "evidence", "text": "long evidence", "tokens": 80, "priority": 80}
+        ]
+      },
+      "expected_selected": ["constraints", "evidence"],
+      "expected_clipped": ["evidence"],
+      "expected_dropped": [],
+      "expect_ok": true,
+      "expected_over_budget": false
+    },
+    {
+      "name": "required_section_over_budget_fails",
+      "request": {
+        "max_input_tokens": 60,
+        "reserved_output_tokens": 20,
+        "sections": [
+          {"name": "constraints", "text": "too large required block", "tokens": 90, "required": true, "priority": 100},
+          {"name": "evidence", "text": "secondary evidence", "tokens": 20, "priority": 80}
+        ]
+      },
+      "expected_selected": ["constraints"],
+      "expected_dropped": ["evidence"],
+      "expect_ok": false,
+      "expected_over_budget": true
+    }
+  ]
+}

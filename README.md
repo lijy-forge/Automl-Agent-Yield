@@ -17,12 +17,12 @@
 > `run_yield.py`（有限状态机编排）与 `operation_agent/yield_guardrails.py`（确定性护栏层）。
 
 This repository is now focused on high-solid-content slurry yield-stress
-prediction. The active workflow is managed by `YieldAgentManager`: it profiles
-data, searches external rheology/ML sources, builds candidate mechanisms and
-models, asks the OperationAgent to generate runnable training code, and verifies
-the generated run with deterministic guardrails. If OperationAgent exhausts its
-per-round repair attempts, the manager returns to CandidateAgent/ModelAgent with
-failure feedback before trying the next managed revision round.
+prediction. The original domain methods remain on `YieldAgentManager`, while
+`yieldmind.domain_workflow` schedules them as explicit LangGraph nodes:
+DataAgent, SearchAgent, CandidateAgent, ModelAgent, pre-execution review,
+OperationAgent, and post-execution review. A failed review follows a bounded
+revision edge back to CandidateAgent/ModelAgent instead of hiding the loop in
+one graph node.
 
 ## Main Entry Points
 
@@ -50,12 +50,91 @@ python run_yield_live.py --port 5052
 The dashboard serves `templates/yield_dashboard.html` and invokes
 `run_yield.py` in the background.
 
+YieldMind upgrade layer:
+
+```bash
+/opt/anaconda3/envs/amla/bin/python scripts/init_yieldmind_db.py
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_eval.py
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_retrieval_eval.py
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_function_calling_smoke.py
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_api.py --port 8070
+```
+
+The live domain StateGraph is deliberately opt-in because CandidateAgent and
+ModelAgent call the configured model API:
+
+```bash
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_domain_workflow.py \
+  --synthetic-data --no-external-search --no-require-search-results \
+  --allow-live-llm
+```
+
+This additive layer provides FastAPI, PostgreSQL production persistence with a
+SQLite offline-test mode, a Pydantic Tool Registry, bounded Python process-group
+execution, real LangGraph StateGraphs, a
+function-calling adapter, a Chroma-backed domain knowledge base, session/memory
+primitives, safety/evidence guardrails, a data-driven offline evaluation suite,
+and a small web page at
+`http://127.0.0.1:8070`. The default evaluation is deterministic and records
+`real_llm_calls=0`; running live LLM function calling or the original LLM
+pipeline requires the explicit `allow_live_llm=true` flag.
+
+The knowledge path supports version-isolated Chroma vector indexes, BM25+ and
+reciprocal-rank-fusion hybrid retrieval. The default vector profile is
+deterministic hashing for offline regression only; it is not presented as a
+semantic embedding result. The 30-query benchmark includes Chinese cross-language
+queries and reports Recall@5, MRR, citation accuracy at one, and latency:
+
+```bash
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_retrieval_eval.py
+/opt/anaconda3/envs/amla/bin/python scripts/check_yieldmind_embedding_capability.py
+```
+
+An optional sentence-transformers profile refuses model downloads unless
+`--allow-model-download` is supplied. Model ID, revision, dimension,
+normalization, metric, instructions, and index version are part of the profile;
+the revision must be immutable rather than the floating `main` branch, and
+different profiles use different Chroma collections. The current shared
+environment pins `transformers==4.40.1`, so Qwen3 Embedding has not been run or
+claimed here; validate it in an isolated compatible environment before making
+it the production default.
+
+Live Function Calling validates every model-selected tool and argument object
+against the Tool Registry before execution. Tool results are redacted, returned
+to the model with their `tool_call_id`, and followed by a second constrained
+answer call. Injected protocol-test clients are recorded as simulated calls,
+never as real model calls.
+
+Qwen3 Embedding runs in a separate Python environment because its required
+`tokenizers>=0.21` conflicts with Chroma 0.5.23 in the main environment. The
+model process only serves normalized vectors on loopback; Chroma and database
+access remain in the main application:
+
+```bash
+bash scripts/setup_yieldmind_qwen3_env.sh
+YIELDMIND_EMBEDDING_TOKEN=local-only-token \
+  .venv-qwen3/bin/python scripts/run_yieldmind_embedding_server.py \
+  --hf-home agent_workspace/yieldmind/hf_cache --port 8091
+
+YIELDMIND_EMBEDDING_TOKEN=local-only-token \
+  /opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_retrieval_eval.py \
+  --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091
+```
+
+The preset pins the model to an immutable Hugging Face commit. Add
+`--allow-model-download` to the server only for the initial controlled download.
+
 ## Active Modules
 
 - `run_yield.py`: owns `YieldAgentManager`, the yield-specific manager that
-  orchestrates synthetic data preparation, external search, candidate
-  generation, model planning, code generation, verification, and manager-level
-  revision.
+  implements the original domain phases and algorithms used by both the legacy
+  entry point and the domain StateGraph adapter.
+- `yieldmind/domain_workflow.py`: explicitly schedules prepare/data/search,
+  CandidateAgent, ModelAgent, OperationAgent, review, revision, cancellation,
+  and finish nodes without storing clients, DataFrames, or processes in graph
+  state.
+- `yieldmind/process_control.py`: polls timeout/cancellation and terminates the
+  complete POSIX process group with TERM/KILL escalation.
 - `operation_agent/`: generates and executes yield-stress training scripts.
 - `operation_agent/yield_guardrails.py`: verifies mandatory metrics,
   predictions, model artifacts, preprocessing artifacts, mechanism reports, and
@@ -66,6 +145,84 @@ The dashboard serves `templates/yield_dashboard.html` and invokes
 - `knowledge/yield_retriever.py`: retrieves and ranks yield-stress sources.
 - `knowledge/yield_baselines.py`: evaluates fixed reference baselines.
 - `live_dashboard.py` and `templates/yield_dashboard.html`: yield-only live UI.
+- `yieldmind/`: additive service, database, tool registry, sandbox, evaluation,
+  LangGraph workflow, function-calling adapter, knowledge base, session/memory,
+  safety/evidence checks, and display layer for the staged Agent upgrade plan.
+
+## YieldMind Upgrade Verification
+
+The additive YieldMind layer keeps the original domain algorithms intact. Its
+offline regression suite makes no LLM calls and reports that boundary in every
+evaluation artifact.
+
+```bash
+/opt/anaconda3/envs/amla/bin/python -m pytest tests/test_yieldmind_core.py -q
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_eval.py
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_workflow.py --n-samples 40 --n-splits 2
+```
+
+The Docker sandbox is opt-in, never pulls images automatically, and applies
+`--network none`, a read-only root filesystem/repository mount, a dedicated
+writable output mount, dropped capabilities, and CPU/memory/PID limits. Build
+the local runtime explicitly, then run the one-shot smoke check:
+
+```bash
+docker build -f docker/yieldmind-sandbox.Dockerfile -t yieldmind-sandbox:local .
+/opt/anaconda3/envs/amla/bin/python scripts/check_yieldmind_docker_sandbox.py \
+  --allow-docker --image yieldmind-sandbox:local
+```
+
+Without `--allow-docker`, no container is started. A stopped/unavailable Docker
+daemon or missing local image is reported as a failed capability check rather
+than a successful sandbox run.
+
+PostgreSQL is the production persistence backend and Redis is the Celery
+broker/result backend. LangGraph uses `PostgresSaver` in this mode and the
+database initialization command creates its checkpoint tables. SQLite remains
+available for deterministic offline tests and uses an in-memory checkpointer.
+Workflow tool calls use durable idempotency claims: completed calls can be
+reused, while an ambiguous in-progress call is not replayed automatically.
+
+```bash
+docker compose -f compose.yieldmind.yml up -d --wait postgres redis
+export YIELDMIND_DATABASE_URL='postgresql+psycopg://yieldmind:yieldmind_dev_only@127.0.0.1:5432/yieldmind'
+export YIELDMIND_REDIS_URL='redis://:yieldmind_redis_dev_only@127.0.0.1:6379/0'
+/opt/anaconda3/envs/amla/bin/python scripts/init_yieldmind_db.py
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_postgres_redis_smoke.py
+```
+
+Run `scripts/run_yieldmind_worker.py` in a separate process to consume the
+`yieldmind` Celery queue. The checked-in credentials are local-development
+defaults only; production deployments must inject different secrets.
+
+The deterministic queue endpoint is `POST /api/tasks/workflows/offline`; the
+original multi-agent StateGraph endpoint is `POST /api/tasks/workflows/domain`.
+The latter rejects execution unless its request explicitly contains
+`allow_live_llm=true`.
+
+Queued and running tasks can be cancelled through
+`POST /api/tasks/{task_id}/cancel`. PostgreSQL records cancellation time,
+reason, and the caller-provided requester label before Celery receives a
+best-effort revoke. Queued tasks stop immediately. Running workflows stop
+cooperatively at the next LangGraph node boundary and persist a `cancel` stage;
+the task and linked run then both become `cancelled`. For tasks submitted to
+`POST /api/tasks/workflows/domain`, the OperationAgent node additionally polls
+the same cancellation state while running and stops its process group, including
+generated-code descendants. Other synchronous tools still cancel only at node
+boundaries.
+
+The real integration checks are available in
+`scripts/run_yieldmind_running_cancel_smoke.py` and
+`scripts/run_yieldmind_redis_outage_smoke.py`. The latter verifies that
+PostgreSQL remains the task-status authority when Redis/Celery control is
+unavailable; it does not claim Redis or PostgreSQL high availability.
+
+Workers also hold a renewable database lease. Expired active tasks are listed
+by `GET /api/task-recovery/stale`. Recovery through
+`POST /api/tasks/{task_id}/recover` requires an explicit confirmation that the
+old worker has stopped, marks the old task/run `interrupted`, and creates a new
+linked task/run. It never moves an old terminal task back to `running` and does
+not claim to resume an optimizer or subprocess from its internal state.
 
 ## Required Outputs
 
