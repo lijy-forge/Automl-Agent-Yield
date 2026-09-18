@@ -25,6 +25,10 @@ from yieldmind.knowledge_base import (
     HttpEmbeddingFunction,
     KnowledgeBase,
     KnowledgeIngestRequest,
+    QWEN3_INDEX_VERSION,
+    QWEN3_MODEL_ID,
+    QWEN3_QUERY_INSTRUCTION,
+    QWEN3_REVISION,
     evaluate_retrieval,
 )
 
@@ -32,15 +36,6 @@ from yieldmind.knowledge_base import (
 DEFAULT_CASES = PROJECT_ROOT / "evals" / "yieldmind_retrieval_cases_v1.json"
 DEFAULT_SOURCES = PROJECT_ROOT / "knowledge_sources"
 DEFAULT_OUTPUT = PROJECT_ROOT / "agent_workspace" / "yieldmind" / "retrieval_evals"
-QWEN3_MODEL_ID = "Qwen/Qwen3-Embedding-0.6B"
-QWEN3_REVISION = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
-QWEN3_INDEX_VERSION = "yieldmind-qwen3-embedding-0.6b-97b0c614-1024-v1"
-QWEN3_QUERY_INSTRUCTION = (
-    "Instruct: Given a query about yield-stress modeling and the YieldMind system, "
-    "retrieve relevant passages that answer the query\nQuery:"
-)
-
-
 def _peak_rss_bytes() -> int:
     value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return value if platform.system() == "Darwin" else value * 1024

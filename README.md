@@ -137,6 +137,21 @@ repository-specific set, not production-quality evidence. Hashing remains the
 deterministic offline default; Qwen3 hybrid retrieval is the measured quality
 candidate while the benchmark is expanded and independently reviewed.
 
+To exercise Qwen retrieval inside the actual deterministic StateGraph, start
+the loopback embedding service and PostgreSQL/Redis, then run:
+
+```bash
+YIELDMIND_EMBEDDING_TOKEN=local-only-token \
+YIELDMIND_DATABASE_URL='postgresql+psycopg://yieldmind:yieldmind_dev_only@127.0.0.1:5432/yieldmind' \
+  /opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_qwen_workflow_smoke.py \
+  --embedding-endpoint http://127.0.0.1:8091 --require-redis
+```
+
+This path adds an explicit `retrieve_evidence` node. It invokes the registered
+`search_knowledge` tool, validates returned chunk identity/version metadata,
+and writes structured evidence references into the final report. Qwen remains
+opt-in: ordinary offline workflows do not require the model service.
+
 ## Active Modules
 
 - `run_yield.py`: owns `YieldAgentManager`, the yield-specific manager that
