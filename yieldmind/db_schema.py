@@ -113,9 +113,12 @@ sessions = Table(
     Column("status", String(64), nullable=False),
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
+    Column("workspace_id", String(64), nullable=False, server_default="default"),
     Column("current_run_id", String(64), nullable=False, server_default=""),
     Column("constraints_json", Text, nullable=False, server_default="{}"),
+    Column("constraint_version", Integer, nullable=False, server_default="0"),
     Column("summary", Text, nullable=False, server_default=""),
+    Column("summary_through_turn_id", String(64), nullable=False, server_default=""),
 )
 
 turns = Table(
@@ -128,6 +131,7 @@ turns = Table(
     Column("content", Text, nullable=False),
     Column("status", String(64), nullable=False),
     Column("created_at", Float, nullable=False),
+    Column("constraint_version", Integer, nullable=False, server_default="0"),
     Column("metadata_json", Text, nullable=False, server_default="{}"),
     UniqueConstraint("session_id", "idempotency_key", name="uq_yieldmind_turn_idempotency"),
 )
@@ -137,16 +141,28 @@ memories = Table(
     metadata,
     Column("memory_id", String(64), primary_key=True),
     Column("session_id", String(64), nullable=False, server_default=""),
+    Column("workspace_id", String(64), nullable=False, server_default="default"),
     Column("scope", String(64), nullable=False),
     Column("kind", String(64), nullable=False),
     Column("content", Text, nullable=False),
     Column("source_ref", Text, nullable=False),
     Column("status", String(64), nullable=False),
+    Column("validation_status", String(32), nullable=False, server_default="confirmed"),
+    Column("source_run_id", String(64), nullable=False, server_default=""),
+    Column("applicability_json", Text, nullable=False, server_default="{}"),
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
     Column("metadata_json", Text, nullable=False, server_default="{}"),
 )
 Index("idx_yieldmind_memories_scope", memories.c.scope, memories.c.kind, memories.c.status)
+Index(
+    "idx_yieldmind_memories_context",
+    memories.c.workspace_id,
+    memories.c.session_id,
+    memories.c.scope,
+    memories.c.validation_status,
+    memories.c.status,
+)
 
 stage_executions = Table(
     "yieldmind_stage_executions",

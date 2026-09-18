@@ -407,7 +407,12 @@ def run_offline_evaluation(
         AddMessageRequest(session_id=session_id, content="把搜索预算调小，再运行一次", idempotency_key="eval-turn-2")
     )
     mem = memory_store.upsert_memory(
-        UpsertMemoryRequest(session_id=session_id, content="用户确认偏好小搜索预算", source_ref=turn2["turn"]["turn_id"])
+        UpsertMemoryRequest(
+            session_id=session_id,
+            content="用户确认偏好小搜索预算",
+            source_ref=turn2["turn"]["turn_id"],
+            validation_status="confirmed",
+        )
     )
     context_before_delete = memory_store.build_context(session_id, max_tokens=600)
     deleted = memory_store.delete_memory(type("Req", (), {"memory_id": mem["memory_id"]})())

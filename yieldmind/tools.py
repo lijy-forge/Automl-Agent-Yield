@@ -383,6 +383,8 @@ class ToolRegistry:
         args: dict[str, Any] | None = None,
         *,
         run_id: str | None = None,
+        session_id: str | None = None,
+        turn_id: str | None = None,
         idempotency_key: str = "",
     ) -> ToolResult:
         parsed = self.validate_call(name, args)
@@ -397,6 +399,8 @@ class ToolRegistry:
                 args=payload_args,
                 idempotency_key=idempotency_key,
                 run_id=run_id,
+                session_id=session_id,
+                turn_id=turn_id,
                 started_at=started,
             )
             if existed:
@@ -438,6 +442,8 @@ class ToolRegistry:
                     result=payload_result,
                     error=result.error,
                     run_id=run_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
                     started_at=started,
                     completed_at=completed,
                 )

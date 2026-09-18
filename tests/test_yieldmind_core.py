@@ -34,7 +34,15 @@ from yieldmind.knowledge_runtime import (
     configured_knowledge_base,
     knowledge_runtime_health,
 )
-from yieldmind.memory import AddMessageRequest, CreateSessionRequest, SessionMemoryStore, UpsertMemoryRequest
+from yieldmind.memory import (
+    AddMessageRequest,
+    CreateSessionRequest,
+    MemoryVersionConflict,
+    ReviewMemoryRequest,
+    SessionMemoryStore,
+    UpdateSessionSummaryRequest,
+    UpsertMemoryRequest,
+)
 from yieldmind.sandbox import DockerSandbox, DockerSandboxCommand, build_docker_argv
 from yieldmind.task_queue import (
     EnqueueWorkflowRequest,
@@ -836,6 +844,61 @@ def test_agent_loop_stops_when_max_steps_are_exhausted(tmp_path: Path) -> None:
     assert len(result.steps) == 2
 
 
+def test_agent_loop_links_tool_trace_to_session_and_turn(tmp_path: Path) -> None:
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    memory = SessionMemoryStore(store)
+    session = memory.create_session(CreateSessionRequest())
+    turn = memory.add_message(
+        AddMessageRequest(
+            session_id=session["session_id"],
+            content="请对输入进行脱敏",
+            idempotency_key="agent-loop-turn",
+        )
+    )["turn"]
+    client = _fake_client(
+        [
+            _tool_message("redact_sensitive_payload", '{"payload":{"email":"alice@example.com"}}'),
+            SimpleNamespace(content="Sensitive fields were redacted.", tool_calls=[]),
+        ]
+    )
+    result = execute_plan(
+        ToolPlanRequest(
+            prompt="Redact the input",
+            allow_live_llm=True,
+            session_id=session["session_id"],
+            turn_id=turn["turn_id"],
+        ),
+        registry=ToolRegistry(store=store),
+        store=store,
+        client=client,
+        simulated_test_adapter=True,
+    )
+    assert result.passed is True
+    with connect(store.db_path) as conn:
+        tool_call = conn.execute(
+            "SELECT session_id, turn_id FROM yieldmind_tool_calls WHERE run_id=?",
+            (result.run_id,),
+        ).fetchone()
+    assert tool_call is not None
+    assert tool_call["session_id"] == session["session_id"]
+    assert tool_call["turn_id"] == turn["turn_id"]
+
+    another_session = memory.create_session(CreateSessionRequest())
+    with pytest.raises(ToolCallProtocolError, match="does not belong"):
+        execute_plan(
+            ToolPlanRequest(
+                prompt="Invalid turn binding",
+                allow_live_llm=True,
+                session_id=another_session["session_id"],
+                turn_id=turn["turn_id"],
+            ),
+            registry=ToolRegistry(store=store),
+            store=store,
+            client=_fake_client([]),
+            simulated_test_adapter=True,
+        )
+
+
 def test_workflow_runs_with_local_fallback(tmp_path: Path) -> None:
     store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
     result = run_workflow(WorkflowRequest(prompt="Run deterministic demo baseline workflow.", n_samples=40, n_splits=2), store=store)
@@ -1441,9 +1504,171 @@ def test_session_memory_constraints_and_delete(tmp_path: Path) -> None:
     assert created["action"] == "create_run"
     assert created["run_id"].startswith("run_")
     mem = memory.upsert_memory(
-        UpsertMemoryRequest(session_id=session_id, content="用户偏好小搜索预算", source_ref="turn-2")
+        UpsertMemoryRequest(
+            session_id=session_id,
+            content="用户偏好小搜索预算",
+            source_ref="turn-2",
+            validation_status="confirmed",
+        )
     )
     assert memory.search_memories(session_id=session_id)
     deleted = memory.delete_memory(type("Req", (), {"memory_id": mem["memory_id"]})())
     assert deleted["ok"] is True
     assert not memory.search_memories(session_id=session_id)
+
+
+def test_session_constraint_version_rejects_stale_concurrent_update(tmp_path: Path) -> None:
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    memory = SessionMemoryStore(store)
+    session = memory.create_session(CreateSessionRequest(constraints={"target_column": "yield_stress"}))
+    session_id = session["session_id"]
+
+    accepted = memory.add_message(
+        AddMessageRequest(
+            session_id=session_id,
+            content="目标列改成 tau0",
+            idempotency_key="concurrent-a",
+            expected_constraint_version=0,
+        )
+    )
+    assert accepted["constraint_version"] == 1
+    with pytest.raises(MemoryVersionConflict, match="expected 0, current 1"):
+        memory.add_message(
+            AddMessageRequest(
+                session_id=session_id,
+                content="把搜索预算调小",
+                idempotency_key="concurrent-b",
+                expected_constraint_version=0,
+            )
+        )
+    current = memory.get_session(session_id)
+    assert current is not None
+    assert current["constraint_version"] == 1
+    assert current["constraints"] == {"target_column": "tau0"}
+    assert [turn["idempotency_key"] for turn in memory.list_messages(session_id)] == ["concurrent-a"]
+
+
+def test_layered_memory_admission_workspace_isolation_and_summary_provenance(tmp_path: Path) -> None:
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    memory = SessionMemoryStore(store)
+    session_a = memory.create_session(CreateSessionRequest(workspace_id="workspace_a"))
+    session_a2 = memory.create_session(CreateSessionRequest(workspace_id="workspace_a"))
+    session_b = memory.create_session(CreateSessionRequest(workspace_id="workspace_b"))
+    turn = memory.add_message(
+        AddMessageRequest(
+            session_id=session_a["session_id"],
+            content="请优先使用小搜索预算",
+            idempotency_key="summary-source",
+        )
+    )["turn"]
+
+    session_only = memory.upsert_memory(
+        UpsertMemoryRequest(
+            session_id=session_a["session_id"],
+            scope="session",
+            content="本会话的数据单位是 Pa",
+            source_ref=turn["turn_id"],
+            validation_status="confirmed",
+        )
+    )
+    candidate = memory.upsert_memory(
+        UpsertMemoryRequest(
+            session_id=session_a["session_id"],
+            scope="workspace",
+            kind="preference",
+            content="工作区偏好小搜索预算",
+            source_ref=turn["turn_id"],
+            validation_status="candidate",
+        )
+    )
+    assert {item["memory_id"] for item in memory.search_memories(session_id=session_a["session_id"])} == {
+        session_only["memory_id"]
+    }
+
+    confirmed = memory.review_memory(
+        ReviewMemoryRequest(memory_id=candidate["memory_id"], validation_status="confirmed")
+    )
+    assert confirmed["validation_status"] == "confirmed"
+    assert candidate["memory_id"] in {
+        item["memory_id"] for item in memory.search_memories(session_id=session_a2["session_id"])
+    }
+    assert candidate["memory_id"] not in {
+        item["memory_id"] for item in memory.search_memories(session_id=session_b["session_id"])
+    }
+    assert session_only["memory_id"] not in {
+        item["memory_id"] for item in memory.search_memories(session_id=session_a2["session_id"])
+    }
+
+    with pytest.raises(ValueError, match="requires source_run_id"):
+        memory.upsert_memory(
+            UpsertMemoryRequest(
+                session_id=session_a["session_id"],
+                scope="workspace",
+                kind="successful_experience",
+                content="未知来源的成功经验",
+                source_ref=turn["turn_id"],
+                validation_status="confirmed",
+            )
+        )
+    run_id = store.create_run(mode="test", source="pytest")
+    store.update_run(run_id, status="passed", result={"ok": True}, completed=True)
+    accepted_experience = memory.upsert_memory(
+        UpsertMemoryRequest(
+            session_id=session_a["session_id"],
+            scope="workspace",
+            kind="successful_experience",
+            content="该数据协议下小搜索预算已验收",
+            source_ref=turn["turn_id"],
+            source_run_id=run_id,
+            validation_status="confirmed",
+            applicability={"target_column": "yield_stress"},
+        )
+    )
+    assert accepted_experience["applicability"] == {"target_column": "yield_stress"}
+
+    updated = memory.update_summary(
+        UpdateSessionSummaryRequest(
+            session_id=session_a["session_id"],
+            summary="用户已确认小搜索预算。",
+            through_turn_id=turn["turn_id"],
+        )
+    )
+    assert updated["summary_through_turn_id"] == turn["turn_id"]
+    context = memory.build_context(session_a["session_id"])
+    sections = {item["name"]: item["text"] for item in context["sections"]}
+    assert turn["turn_id"] in sections["rolling_summary"]
+    assert "工作区偏好小搜索预算" in sections["workspace_memories"]
+
+
+def test_session_api_returns_conflict_for_stale_constraint_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    monkeypatch.setattr(yieldmind_api, "store", store)
+    client = TestClient(yieldmind_api.app)
+    created = client.post("/api/sessions", json={"workspace_id": "api_workspace"})
+    assert created.status_code == 200
+    session_id = created.json()["session"]["session_id"]
+
+    accepted = client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={
+            "session_id": session_id,
+            "content": "目标列改成 tau0",
+            "idempotency_key": "api-version-a",
+            "expected_constraint_version": 0,
+        },
+    )
+    stale = client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={
+            "session_id": session_id,
+            "content": "把搜索预算调小",
+            "idempotency_key": "api-version-b",
+            "expected_constraint_version": 0,
+        },
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["constraint_version"] == 1
+    assert stale.status_code == 409
+    assert "expected 0, current 1" in stale.json()["detail"]

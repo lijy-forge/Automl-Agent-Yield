@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from yieldmind.database import YieldMindStore
 from yieldmind.domain_workflow import DomainWorkflowRequest, run_domain_workflow
 from yieldmind.evaluation import run_offline_evaluation
-from yieldmind.function_calling import ToolPlanRequest, execute_plan, plan_tools
+from yieldmind.function_calling import ToolCallProtocolError, ToolPlanRequest, execute_plan, plan_tools
 from yieldmind.knowledge_base import KnowledgeBase, KnowledgeIngestRequest, KnowledgeSearchRequest
 from yieldmind.knowledge_runtime import (
     KnowledgeRuntimeConfig,
@@ -27,7 +27,10 @@ from yieldmind.memory import (
     AddMessageRequest,
     CreateSessionRequest,
     DeleteMemoryRequest,
+    MemoryVersionConflict,
+    ReviewMemoryRequest,
     SessionMemoryStore,
+    UpdateSessionSummaryRequest,
     UpsertMemoryRequest,
 )
 from yieldmind.safety import (
@@ -265,6 +268,8 @@ def add_session_message(session_id: str, request: AddMessageRequest) -> dict[str
         return SessionMemoryStore(store).add_message(request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MemoryVersionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/sessions/{session_id}/messages")
@@ -280,14 +285,52 @@ def get_session_context(session_id: str, max_tokens: int = 1200) -> dict[str, An
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.put("/api/sessions/{session_id}/summary")
+def update_session_summary(session_id: str, request: UpdateSessionSummaryRequest) -> dict[str, Any]:
+    if request.session_id != session_id:
+        raise HTTPException(status_code=400, detail="path session_id and body session_id differ")
+    try:
+        return {"session": SessionMemoryStore(store).update_summary(request)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/memories")
 def upsert_memory(request: UpsertMemoryRequest) -> dict[str, Any]:
-    return {"memory": SessionMemoryStore(store).upsert_memory(request)}
+    try:
+        return {"memory": SessionMemoryStore(store).upsert_memory(request)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/memories")
-def search_memories(session_id: str = "", limit: int = 20) -> dict[str, Any]:
-    return {"memories": SessionMemoryStore(store).search_memories(session_id=session_id, limit=limit)}
+def search_memories(session_id: str = "", workspace_id: str = "default", limit: int = 20) -> dict[str, Any]:
+    try:
+        return {
+            "memories": SessionMemoryStore(store).search_memories(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                limit=limit,
+            )
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/memories/{memory_id}/review")
+def review_memory(memory_id: str, request: ReviewMemoryRequest) -> dict[str, Any]:
+    if request.memory_id != memory_id:
+        raise HTTPException(status_code=400, detail="path memory_id and body memory_id differ")
+    try:
+        return {"memory": SessionMemoryStore(store).review_memory(request)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/api/memories/{memory_id}")
@@ -369,6 +412,8 @@ def plan_agent_tools(request: ToolPlanRequest) -> dict[str, Any]:
         result = plan_tools(request, registry=registry)
     except PermissionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (ToolCallProtocolError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result.model_dump()
 
 
@@ -377,5 +422,7 @@ def execute_agent_plan(request: ToolPlanRequest) -> dict[str, Any]:
     try:
         result = execute_plan(request, registry=registry, store=store)
     except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (ToolCallProtocolError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result.model_dump()
