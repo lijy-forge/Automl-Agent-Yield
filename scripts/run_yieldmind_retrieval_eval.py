@@ -105,6 +105,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         raise ValueError(f"No Markdown sources found in {args.sources_dir}.")
 
     profile = _profile(args)
+    embedding_service_health: dict[str, Any] | None = None
     with tempfile.TemporaryDirectory(prefix="yieldmind_retrieval_") as tmp:
         root = Path(tmp)
         store = YieldMindStore(root / "yieldmind.sqlite3")
@@ -142,6 +143,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             mode: evaluate_retrieval(kb, cases, top_k=args.top_k, retrieval_mode=mode)
             for mode in ("vector", "bm25", "hybrid")
         }
+        if isinstance(kb.embedding, HttpEmbeddingFunction):
+            embedding_service_health = kb.embedding.health()
 
     report: dict[str, Any] = {
         "status": "passed",
@@ -168,6 +171,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "document_batches": int(getattr(kb.embedding, "document_encode_calls", 0)),
             "query_calls": int(getattr(kb.embedding, "query_encode_calls", 0)),
         },
+        "embedding_service_health": embedding_service_health,
         "process_peak_rss_bytes": _peak_rss_bytes(),
         "baselines": baselines,
         "ingestion": {
@@ -181,7 +185,11 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         "duration_seconds": round(time.time() - started, 4),
         "limitations": [
             "Labels cover repository behavior and project domain constraints, not an external literature benchmark.",
-            "The default vector baseline uses deterministic hashing and is not a semantic embedding quality claim.",
+            (
+                "The default vector baseline uses deterministic hashing and is not a semantic embedding quality claim."
+                if profile.provider == "local_hashing"
+                else "This run uses real semantic embedding inference; the production default remains unchanged pending a larger independently reviewed benchmark."
+            ),
             "No reranker is included; add one only after a measured baseline warrants the extra latency and dependencies.",
         ],
     }

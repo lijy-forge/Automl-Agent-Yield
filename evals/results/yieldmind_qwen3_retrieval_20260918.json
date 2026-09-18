@@ -1,0 +1,76 @@
+{
+  "status": "passed",
+  "evaluated_at": "2026-09-18",
+  "benchmark_version": "yieldmind-retrieval-cases-v1",
+  "label_scope": "Repository behavior and domain constraints, manually labeled by source document.",
+  "case_count": 30,
+  "source_count": 7,
+  "chunk_count": 20,
+  "embedding_execution_mode": "isolated_http_sentence_transformer_real_inference",
+  "model": {
+    "id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "dimensions": 1024,
+    "device": "cpu",
+    "normalized": true,
+    "model_download_allowed_during_evaluation": false
+  },
+  "embedding_environment": {
+    "torch": "2.2.1",
+    "transformers": "4.51.3",
+    "sentence-transformers": "4.1.0"
+  },
+  "metrics": {
+    "vector": {
+      "recall_at_5": 0.9666666666666667,
+      "mrr": 0.7788888888888889,
+      "citation_accuracy_at_1": 0.6666666666666666,
+      "mean_latency_ms": 378.5851,
+      "max_latency_ms": 704.81
+    },
+    "bm25": {
+      "recall_at_5": 0.8,
+      "mrr": 0.8,
+      "citation_accuracy_at_1": 0.8,
+      "mean_latency_ms": 2.4416,
+      "max_latency_ms": 4.368
+    },
+    "hybrid_rrf": {
+      "recall_at_5": 1.0,
+      "mrr": 0.8638888888888889,
+      "citation_accuracy_at_1": 0.7666666666666667,
+      "mean_latency_ms": 431.2603,
+      "max_latency_ms": 694.039
+    }
+  },
+  "resource_observations": {
+    "model_load_seconds_from_local_cache": 3.9548,
+    "index_seconds": 15.5981,
+    "evaluation_seconds": 40.0174,
+    "embedding_service_peak_rss_bytes": 3901263872,
+    "evaluation_client_peak_rss_bytes": 131563520,
+    "encode_calls": 67,
+    "encoded_texts": 80
+  },
+  "model_call_accounting": {
+    "real_llm_calls": 0,
+    "simulated_model_calls": 0,
+    "document_embedding_batches": 7,
+    "query_embedding_calls": 60
+  },
+  "security_checks": {
+    "loopback_only": true,
+    "bearer_request_without_token_http_status": 401,
+    "service_stopped_after_evaluation": true
+  },
+  "full_local_report": {
+    "path": "agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_103507.json",
+    "sha256": "729bb2fdb797a54ee28e18c9dfee918e266e588ce53f4588052054242c378d47",
+    "tracked_by_git": false
+  },
+  "limitations": [
+    "The labels are a small, single-author, repository-specific benchmark rather than an external literature or production benchmark.",
+    "No reranker or BGE-M3 comparison was run.",
+    "The production default remains unchanged pending a larger independently reviewed benchmark."
+  ]
+}

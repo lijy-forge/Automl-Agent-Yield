@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
+import resource
 import secrets
 import signal
 import threading
@@ -19,16 +21,31 @@ QWEN3_REVISION = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
 QWEN3_DIMENSIONS = 1024
 
 
+def _peak_rss_bytes() -> int:
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # macOS reports bytes; Linux reports KiB.
+    return int(peak if os.uname().sysname == "Darwin" else peak * 1024)
+
+
 def _json_bytes(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
 class EmbeddingRuntime:
-    def __init__(self, model: Any, *, model_id: str, revision: str, dimensions: int) -> None:
+    def __init__(
+        self,
+        model: Any,
+        *,
+        model_id: str,
+        revision: str,
+        dimensions: int,
+        load_seconds: float,
+    ) -> None:
         self.model = model
         self.model_id = model_id
         self.revision = revision
         self.dimensions = dimensions
+        self.load_seconds = load_seconds
         self.started_at = time.time()
         self.encode_calls = 0
         self.encoded_texts = 0
@@ -41,6 +58,13 @@ class EmbeddingRuntime:
             "revision": self.revision,
             "dimensions": self.dimensions,
             "device": str(self.model.device),
+            "load_seconds": round(self.load_seconds, 4),
+            "versions": {
+                package: importlib.metadata.version(package)
+                for package in ("torch", "transformers", "sentence-transformers")
+            },
+            "pid": os.getpid(),
+            "process_peak_rss_bytes": _peak_rss_bytes(),
             "encode_calls": self.encode_calls,
             "encoded_texts": self.encoded_texts,
             "uptime_seconds": round(time.time() - self.started_at, 3),
@@ -159,11 +183,13 @@ def main() -> int:
     actual_dimensions = int(model.get_sentence_embedding_dimension())
     if actual_dimensions != args.dimensions:
         raise ValueError(f"Model dimension mismatch: expected {args.dimensions}, got {actual_dimensions}.")
+    load_seconds = time.perf_counter() - load_started
     runtime = EmbeddingRuntime(
         model,
         model_id=args.model_id,
         revision=args.revision,
         dimensions=args.dimensions,
+        load_seconds=load_seconds,
     )
     server = ThreadingHTTPServer((args.host, args.port), handler_factory(runtime, os.environ.get(args.token_env, "")))
     print(
@@ -173,7 +199,6 @@ def main() -> int:
                 **runtime.health(),
                 "host": args.host,
                 "port": args.port,
-                "load_seconds": round(time.perf_counter() - load_started, 4),
                 "model_download_allowed": bool(args.allow_model_download),
                 "hf_home": os.environ.get("HF_HOME", ""),
                 "hf_endpoint": os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
