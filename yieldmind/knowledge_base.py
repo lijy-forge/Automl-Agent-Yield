@@ -14,6 +14,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -234,8 +235,12 @@ class HttpEmbeddingFunction:
         self.profile = profile
         self.dimensions = profile.dimensions
         self.endpoint = endpoint.rstrip("/")
+        parsed_endpoint = urllib.parse.urlsplit(self.endpoint)
+        if parsed_endpoint.scheme != "http" or parsed_endpoint.hostname not in {"127.0.0.1", "::1", "localhost"}:
+            raise ValueError("Embedding endpoint must use HTTP on a loopback host.")
         self.token = token
         self.timeout_seconds = timeout_seconds
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.document_encode_calls = 0
         self.query_encode_calls = 0
         health = self._request("GET", "/health")
@@ -248,6 +253,9 @@ class HttpEmbeddingFunction:
         if actual != expected or not health.get("ok"):
             raise ValueError(f"Embedding service identity mismatch: expected={expected}, actual={actual}.")
 
+    def health(self) -> dict[str, Any]:
+        return self._request("GET", "/health")
+
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         data = json_dumps(payload).encode("utf-8") if payload is not None else None
         headers = {"Content-Type": "application/json"}
@@ -255,7 +263,7 @@ class HttpEmbeddingFunction:
             headers["Authorization"] = f"Bearer {self.token}"
         request = urllib.request.Request(f"{self.endpoint}{path}", data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with self._opener.open(request, timeout=self.timeout_seconds) as response:
                 return json_loads(response.read())
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")

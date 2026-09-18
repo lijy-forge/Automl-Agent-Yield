@@ -328,7 +328,7 @@
 
 ### 阶段 17：Qwen3独立推理环境与真实Embedding评测
 
-- 状态：基础接线和独立环境已完成，锁定模型正在下载；真实检索指标尚未生成，因此不写入成果数字。
+- 状态：已完成。独立环境、固定模型、回环服务、真实CPU推理评测和资源观测均已闭环；评测结束后服务已停止。
 - 逻辑审计：
   - Qwen3要求`transformers>=4.51`及`tokenizers>=0.21`，而主环境Chroma 0.5.23要求`tokenizers<=0.20.3`；将两者强装在同一环境会产生不可解依赖冲突。
   - 采用独立推理进程而非升级主环境：Qwen环境只安装Torch、Transformers和Sentence-Transformers，主环境继续负责Chroma、BM25+、RRF、PostgreSQL及评测。
@@ -337,10 +337,17 @@
   - 主环境保持Transformers 4.40.2、Sentence-Transformers 2.7.0，未被修改。
   - 模型固定为`Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`，维度1024，使用英文领域检索instruction，文档侧不加instruction。
   - 新增仅允许回环地址的embedding服务和带身份握手的HTTP客户端；模型ID、commit或维度不一致时拒绝建索引，支持可选Bearer token、批量限制和向量维度校验。
-  - Hugging Face官方域名在当前网络连接超时；已验证镜像对同一完整commit URL可达，下载来源会在服务启动报告中记录。
-- 待验证：
-  - 模型加载、真实向量生成、30条查询的vector/BM25+/hybrid同口径结果、索引耗时、查询延迟和峰值内存。
-  - 评测结束后关闭本地embedding服务，不保留常驻进程。
+  - HTTP客户端显式绕过系统代理并拒绝非回环endpoint；真实测试发现全局`HTTP_PROXY`会把本机请求转发到代理并返回502，该失败未计入模型评测。
+  - Hugging Face官方域名在首次下载时连接超时；模型通过镜像按同一完整commit下载，最终评测从本地缓存加载且`model_download_allowed=false`，模型缓存和独立环境均不提交Git。
+- 真实验证：
+  - 完整本地报告：`agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_103507.json`；Git跟踪的精简结果：`evals/results/yieldmind_qwen3_retrieval_20260918.json`。两者记录`embedding_execution_mode=isolated_http_sentence_transformer_real_inference`、`real_llm_calls=0`，精简结果同时保存完整报告SHA-256。
+  - Qwen3 vector：Recall@5=`0.9667`、MRR=`0.7789`、Top-1引用准确率=`0.6667`、平均查询延迟=`378.6ms`。
+  - 同次BM25+：`0.8000 / 0.8000 / 0.8000 / 2.4ms`；Qwen3+BM25+ RRF：`1.0000 / 0.8639 / 0.7667 / 431.3ms`。
+  - 7篇文档切分为20个chunk，入库耗时`15.60s`，完整评测耗时`40.02s`；服务从本地缓存加载耗时`3.95s`，峰值RSS约`3.90GB`，共67次encode、80条文本。
+  - Bearer鉴权无令牌返回HTTP 401；评测完成后`8091`连接失败，确认未保留常驻服务。
+- 判断：
+  - Qwen3显著提高Recall@5，和BM25+融合后本集合Recall@5达到1.0；但纯向量Top-1准确率低于BM25+，且CPU平均延迟约高两个数量级。因此当前不把纯Qwen向量设为生产默认，保留离线hashing回归及BM25+，将Qwen3+RRF作为需扩大数据后复核的质量候选。
+  - 30条case是单人标注的项目内集合，不能外推为生产RAG效果；BGE-M3和reranker尚未同口径实测，也不应凭模型榜单宣称优于当前方案。
 
 ## 本轮验证结果
 
@@ -350,9 +357,10 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 通过，`49 passed, 48 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 通过，`51 passed, 48 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束、HTTP embedding回环/代理隔离及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
+| `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |
 | `python scripts/check_yieldmind_embedding_capability.py` | 通过；离线确认Qwen3/BGE-M3均未达到本机零变更运行条件，`network_calls=0`、`model_downloads=0`、`model_inference_calls=0` |
 | `python scripts/run_yieldmind_function_calling_smoke.py` | 通过，生成 skipped 报告；`real_llm_calls=0`，未调用真实模型 |
 | `python scripts/run_yieldmind_workflow.py --n-samples 40 --n-splits 2` | 通过，`status=passed`、`workflow_backend=langgraph_stategraph`、`langgraph_available=true` |
@@ -427,6 +435,6 @@ http://127.0.0.1:8070/api/tools
 - 对新`yieldmind.domain_workflow`执行一次显式授权的真实模型端到端验收，并记录模型、时间、各节点结果与失败原因；当前只完成真实领域方法接线和模拟路由回归。
 - 在30条项目内查询基础上增加真实用户查询、双人标签复核和外部文献语料，避免以当前小规模自建集替代生产效果。
 - 对真实 LLM Function Calling 做一次显式 `allow_live_llm=true` 冒烟测试，并记录模型、时间和结果；默认评测仍保持零 LLM 调用。
-- 在隔离兼容环境以同一30条case实测Qwen3/BGE-M3等候选的质量、内存和延迟，再决定默认embedding；Reranker和Next.js仍未完成。
+- Qwen3已在隔离环境完成同口径实测；下一步先扩充真实查询并双人复核标签，再决定是否切换默认embedding。只有现有失败case仍显示可修复空间时，再投入BGE-M3或Reranker对照；Next.js仍未完成且当前优先级较低。
 - Docker/no-network 运行时已真实通过；官方 `python:3.11-slim` 可复现镜像构建因 Docker Hub token 请求超时未完成，本轮运行验证使用本机缓存 Python 3.8 slim镜像的临时本地标签。
 - LangGraph升级层已有条件边、PostgreSQL持久检查点、Tool持久幂等、节点边界取消、Operation进程组终止和任务级人工恢复；自动恢复、普通同步Tool节点内取消和模糊`running` Tool通用处置仍未完成。

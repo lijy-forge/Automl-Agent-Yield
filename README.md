@@ -94,10 +94,9 @@ An optional sentence-transformers profile refuses model downloads unless
 `--allow-model-download` is supplied. Model ID, revision, dimension,
 normalization, metric, instructions, and index version are part of the profile;
 the revision must be immutable rather than the floating `main` branch, and
-different profiles use different Chroma collections. The current shared
-environment pins `transformers==4.40.1`, so Qwen3 Embedding has not been run or
-claimed here; validate it in an isolated compatible environment before making
-it the production default.
+different profiles use different Chroma collections. The shared environment
+keeps `transformers==4.40.2`; Qwen3 runs behind the isolated loopback service
+described below.
 
 Live Function Calling validates every model-selected tool and argument object
 against the Tool Registry before execution. Tool results are redacted, returned
@@ -123,6 +122,20 @@ YIELDMIND_EMBEDDING_TOKEN=local-only-token \
 
 The preset pins the model to an immutable Hugging Face commit. Add
 `--allow-model-download` to the server only for the initial controlled download.
+On the current CPU-only host, the 30-query real-inference run produced the
+following results (Recall@5 / MRR / citation accuracy@1 / mean query latency):
+
+| Retrieval | Metrics |
+| --- | --- |
+| Qwen3 vector | `0.9667 / 0.7789 / 0.6667 / 378.6 ms` |
+| BM25+ | `0.8000 / 0.8000 / 0.8000 / 2.4 ms` |
+| Qwen3 + BM25+ RRF | `1.0000 / 0.8639 / 0.7667 / 431.3 ms` |
+
+The model service peaked at about `3.90 GB` RSS; indexing 20 chunks took
+`15.60s`, excluding model loading. These are results on a small, single-author,
+repository-specific set, not production-quality evidence. Hashing remains the
+deterministic offline default; Qwen3 hybrid retrieval is the measured quality
+candidate while the benchmark is expanded and independently reviewed.
 
 ## Active Modules
 

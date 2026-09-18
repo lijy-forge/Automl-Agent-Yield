@@ -20,7 +20,13 @@ from yieldmind.function_calling import (
     local_rule_plan,
     plan_tools,
 )
-from yieldmind.knowledge_base import EmbeddingProfile, KnowledgeBase, KnowledgeIngestRequest, KnowledgeSearchRequest
+from yieldmind.knowledge_base import (
+    EmbeddingProfile,
+    HttpEmbeddingFunction,
+    KnowledgeBase,
+    KnowledgeIngestRequest,
+    KnowledgeSearchRequest,
+)
 from yieldmind.memory import AddMessageRequest, CreateSessionRequest, SessionMemoryStore, UpsertMemoryRequest
 from yieldmind.sandbox import DockerSandbox, DockerSandboxCommand, build_docker_argv
 from yieldmind.task_queue import (
@@ -849,6 +855,49 @@ def test_knowledge_bm25_hybrid_and_profile_isolation(tmp_path: Path) -> None:
         alternate_kb.search(KnowledgeSearchRequest(query="packing"))
     with pytest.raises(ValueError, match="immutable model revision"):
         EmbeddingProfile(provider="sentence_transformers", model_id="Qwen/Qwen3-Embedding-0.6B", revision="main")
+
+
+def test_http_embedding_client_requires_loopback_endpoint() -> None:
+    profile = EmbeddingProfile(
+        provider="http_sentence_transformers",
+        model_id="Qwen/Qwen3-Embedding-0.6B",
+        revision="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        dimensions=1024,
+    )
+    with pytest.raises(ValueError, match="loopback"):
+        HttpEmbeddingFunction(profile, endpoint="https://embedding.example.com")
+
+
+def test_http_embedding_client_bypasses_system_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = EmbeddingProfile(
+        provider="http_sentence_transformers",
+        model_id="Qwen/Qwen3-Embedding-0.6B",
+        revision="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        dimensions=1024,
+    )
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"ok": True, **profile.model_dump()}).encode("utf-8")
+
+    class FakeOpener:
+        def open(self, request: object, *, timeout: float) -> FakeResponse:
+            assert timeout == 10.0
+            return FakeResponse()
+
+    def fake_build_opener(handler: object) -> FakeOpener:
+        assert getattr(handler, "proxies") == {}
+        return FakeOpener()
+
+    monkeypatch.setattr("yieldmind.knowledge_base.urllib.request.build_opener", fake_build_opener)
+    client = HttpEmbeddingFunction(profile, endpoint="http://127.0.0.1:8091", timeout_seconds=10.0)
+    assert client.dimensions == 1024
 
 
 def test_retrieval_eval_dataset_has_distinct_labeled_cases() -> None:
