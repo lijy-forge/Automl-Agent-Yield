@@ -205,15 +205,21 @@ class ToolRegistry:
         workspace_root: str | Path | None = None,
         store: YieldMindStore | None = None,
         knowledge_base: KnowledgeBase | None = None,
+        knowledge_base_factory: Callable[[], KnowledgeBase] | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root or PROJECT_ROOT).resolve()
         self.store = store
         self.knowledge_base = knowledge_base
+        self.knowledge_base_factory = knowledge_base_factory
         self._tools: dict[str, ToolSpec] = {}
         self._register_defaults()
 
     def _knowledge_base(self) -> KnowledgeBase:
-        return self.knowledge_base or KnowledgeBase(store=self.store or YieldMindStore())
+        if self.knowledge_base is not None:
+            return self.knowledge_base
+        if self.knowledge_base_factory is not None:
+            return self.knowledge_base_factory()
+        return KnowledgeBase(store=self.store or YieldMindStore())
 
     def _register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
@@ -929,5 +935,11 @@ def registry_for_workspace(
     store: YieldMindStore | None = None,
     *,
     knowledge_base: KnowledgeBase | None = None,
+    knowledge_base_factory: Callable[[], KnowledgeBase] | None = None,
 ) -> ToolRegistry:
-    return ToolRegistry(workspace_root=PROJECT_ROOT, store=store, knowledge_base=knowledge_base)
+    return ToolRegistry(
+        workspace_root=PROJECT_ROOT,
+        store=store,
+        knowledge_base=knowledge_base,
+        knowledge_base_factory=knowledge_base_factory,
+    )

@@ -27,6 +27,11 @@ from yieldmind.knowledge_base import (
     KnowledgeIngestRequest,
     KnowledgeSearchRequest,
 )
+from yieldmind.knowledge_runtime import (
+    KnowledgeRuntimeConfig,
+    configured_knowledge_base,
+    knowledge_runtime_health,
+)
 from yieldmind.memory import AddMessageRequest, CreateSessionRequest, SessionMemoryStore, UpsertMemoryRequest
 from yieldmind.sandbox import DockerSandbox, DockerSandboxCommand, build_docker_argv
 from yieldmind.task_queue import (
@@ -970,6 +975,56 @@ def test_http_embedding_client_bypasses_system_proxy(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("yieldmind.knowledge_base.urllib.request.build_opener", fake_build_opener)
     client = HttpEmbeddingFunction(profile, endpoint="http://127.0.0.1:8091", timeout_seconds=10.0)
     assert client.dimensions == 1024
+
+
+def test_knowledge_runtime_defaults_to_hashing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("YIELDMIND_EMBEDDING_PROFILE", raising=False)
+    monkeypatch.delenv("YIELDMIND_EMBEDDING_ENDPOINT", raising=False)
+    monkeypatch.setenv("YIELDMIND_CHROMA_DIR", str(tmp_path / "chroma"))
+    config = KnowledgeRuntimeConfig.from_env()
+    knowledge_base = configured_knowledge_base(YieldMindStore(tmp_path / "yieldmind.sqlite3"), config=config)
+
+    assert config.profile == "local_hashing"
+    assert knowledge_base.embedding_profile.provider == "local_hashing"
+    health = knowledge_runtime_health()
+    assert health["ok"] is True
+    assert "chroma_dir" not in health
+
+
+def test_qwen_knowledge_runtime_requires_server_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("YIELDMIND_EMBEDDING_PROFILE", "qwen3-embedding-0.6b")
+    monkeypatch.delenv("YIELDMIND_EMBEDDING_ENDPOINT", raising=False)
+
+    with pytest.raises(ValueError, match="YIELDMIND_EMBEDDING_ENDPOINT"):
+        KnowledgeRuntimeConfig.from_env()
+    health = knowledge_runtime_health()
+    assert health["ok"] is False
+    assert health["profile"] == "qwen3-embedding-0.6b"
+
+    response = TestClient(yieldmind_api.app).get("/api/knowledge/config")
+    assert response.status_code == 503
+    assert "YIELDMIND_EMBEDDING_ENDPOINT" in response.json()["detail"]
+
+
+def test_tool_registry_lazily_builds_knowledge_runtime(tmp_path: Path) -> None:
+    document = tmp_path / "domain.md"
+    document.write_text("YODEL maximum packing phi_m mechanism.", encoding="utf-8")
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    knowledge_base = KnowledgeBase(store=store, chroma_dir=tmp_path / "chroma", collection_name="lazy_runtime")
+    knowledge_base.ingest(KnowledgeIngestRequest(paths=[str(document)], chunk_size=300, chunk_overlap=20))
+    factory_calls = 0
+
+    def factory() -> KnowledgeBase:
+        nonlocal factory_calls
+        factory_calls += 1
+        return knowledge_base
+
+    registry = ToolRegistry(store=store, knowledge_base_factory=factory)
+    assert factory_calls == 0
+    result = registry.execute("search_knowledge", {"query": "YODEL phi_m", "top_k": 1})
+    assert result.ok is True
+    assert result.result["hits"]
+    assert factory_calls == 1
 
 
 def test_retrieval_eval_dataset_has_distinct_labeled_cases() -> None:

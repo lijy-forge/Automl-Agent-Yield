@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,11 @@ from yieldmind.domain_workflow import DomainWorkflowRequest, run_domain_workflow
 from yieldmind.evaluation import run_offline_evaluation
 from yieldmind.function_calling import ToolPlanRequest, execute_plan, plan_tools
 from yieldmind.knowledge_base import KnowledgeBase, KnowledgeIngestRequest, KnowledgeSearchRequest
+from yieldmind.knowledge_runtime import (
+    KnowledgeRuntimeConfig,
+    configured_knowledge_base,
+    knowledge_runtime_health,
+)
 from yieldmind.memory import (
     AddMessageRequest,
     CreateSessionRequest,
@@ -71,7 +77,16 @@ app = FastAPI(
     description="Service/database/tool layer for the yield-stress AutoML agent.",
 )
 store = YieldMindStore()
-registry = registry_for_workspace(store=store)
+
+
+def active_knowledge_base() -> KnowledgeBase:
+    try:
+        return configured_knowledge_base(store)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Knowledge runtime unavailable: {type(exc).__name__}: {exc}") from exc
+
+
+registry = registry_for_workspace(store=store, knowledge_base_factory=lambda: configured_knowledge_base(store))
 
 
 @app.get("/")
@@ -88,6 +103,7 @@ def health() -> dict[str, Any]:
         "database_backend": store.backend,
         "database_location": store.location,
         "tool_count": len(registry.definitions()),
+        "knowledge_profile": os.environ.get("YIELDMIND_EMBEDDING_PROFILE", "local_hashing"),
     }
 
 
@@ -100,10 +116,12 @@ def dependency_health() -> JSONResponse:
     except Exception as exc:
         database_error = f"{type(exc).__name__}: {exc}"
     redis_status = redis_health()
+    knowledge_status = knowledge_runtime_health()
     payload = {
-        "ok": database_ok and bool(redis_status.get("ok")),
+        "ok": database_ok and bool(redis_status.get("ok")) and bool(knowledge_status.get("ok")),
         "database": {"ok": database_ok, "backend": store.backend, "location": store.location, "error": database_error},
         "redis": redis_status,
+        "knowledge": knowledge_status,
     }
     return JSONResponse(status_code=200 if payload["ok"] else 503, content=payload)
 
@@ -190,17 +208,25 @@ def run_eval() -> dict[str, Any]:
 
 @app.post("/api/knowledge/ingest")
 def ingest_knowledge(request: KnowledgeIngestRequest) -> dict[str, Any]:
-    return KnowledgeBase(store=store).ingest(request)
+    return active_knowledge_base().ingest(request)
 
 
 @app.post("/api/knowledge/search")
 def search_knowledge(request: KnowledgeSearchRequest) -> dict[str, Any]:
-    return KnowledgeBase(store=store).search(request)
+    return active_knowledge_base().search(request)
 
 
 @app.get("/api/knowledge/documents")
 def list_knowledge_documents(limit: int = 100) -> dict[str, Any]:
-    return {"documents": KnowledgeBase(store=store).list_documents(limit=limit)}
+    return {"documents": active_knowledge_base().list_documents(limit=limit)}
+
+
+@app.get("/api/knowledge/config")
+def knowledge_config() -> dict[str, Any]:
+    try:
+        return KnowledgeRuntimeConfig.from_env().public_summary()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Knowledge runtime misconfigured: {type(exc).__name__}: {exc}") from exc
 
 
 @app.post("/api/safety/redact")
