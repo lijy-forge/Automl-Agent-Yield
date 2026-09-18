@@ -217,7 +217,7 @@
 
 - 状态：本地容器真实集成已完成；生产部署、密钥管理和高可用未验证。
 - PostgreSQL：
-  - 使用 SQLAlchemy 2.0 metadata 定义 schema，`psycopg` 作为驱动；任务租约升级后当前 Alembic revision 为 `20260918_0004`。
+  - 使用 SQLAlchemy 2.0 metadata 定义 schema，`psycopg` 作为驱动；任务租约阶段revision为`20260918_0004`，Memory升级后当前head为`20260918_0005`。
   - `YieldMindStore` 生产模式读取 `YIELDMIND_DATABASE_URL`，现有参数化查询通过兼容层运行于 PostgreSQL；SQLite只保留离线测试模式。
   - 已真实覆盖 run/event/tool/stage/session/turn/memory/document/chunk/task 读写路径。
   - LangGraph `PostgresSaver` 已接入生产工作流；`scripts/init_yieldmind_db.py` 创建其独立迁移表。
@@ -449,7 +449,7 @@
 
 ### 阶段 24：短期/长期 Memory 完整化
 
-- 状态：方案已确定，尚未实施数据迁移与调用链改造。
+- 状态：24.1数据迁移、短期约束并发保护、长期记忆准入及Tool调用关联已完成；自动滚动摘要和turn/run累计模型预算尚未实施。
 - 短期记忆（session scope）：
   - 保存当前数据集/版本、目标列、评价协议、预算、选定run、取消条件、最近对话和有界滚动摘要。
   - 每次约束更新增加`constraint_version`，并通过乐观并发检查防止两个请求相互覆盖；摘要保留覆盖的turn ID范围。
@@ -462,6 +462,15 @@
   - Function Calling和Tool Registry完整写入`session_id/turn_id`；模型、工具、证据与摘要步骤可回溯到同一turn。
   - 单次上下文裁剪与turn/run累计模型预算分开；优先保留显式约束，再减少历史和证据，累计额度不足时停止下一次模型请求。
 - 预计验收：约束继承与纠正、会话隔离、并发版本冲突、摘要溯源、长期记忆准入/失效、失败经验不被当成成功、删除后不再进入上下文，以及累计预算停止。
+- 24.1实现：
+  - Alembic `20260918_0005`为session增加workspace、约束版本和摘要turn溯源，为turn增加生效约束版本，为memory增加workspace、验收状态、来源run和适用性。SQLite使用等价的可重放增量补列。
+  - session约束更新使用`constraint_version`比较更新；陈旧请求返回显式冲突，FastAPI映射为HTTP 409，不静默覆盖。
+  - `candidate`长期记忆不进入上下文；确认后只对同workspace会话可见。`successful_experience`只能由已存在且状态为`passed`的run确认。
+  - 摘要更新要求`through_turn_id`实际属于当前会话；上下文分开session/workspace memory，仅选择`active + confirmed`记忆并记录裁剪原因。
+  - Agent Loop和Tool Registry现已将`session_id/turn_id`写入Tool Call，不属于该session的turn会在模型调用前拒绝。
+- 24.1验证：
+  - SQLite旧库增量初始化后实查全8个新字段存在；候选/确认记忆可见性、workspace/session隔离、摘要溯源和Tool关联测试通过。
+  - 本地PostgreSQL真实从`0004`升级到`0005`，revision、字段和`idx_yieldmind_memories_context`实查通过；真实CAS冲突及候选/确认准入smoke通过，临时数据已清理，PostgreSQL已停止。
 
 ## 本轮验证结果
 
@@ -471,7 +480,7 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 通过，`64 passed, 74 warnings`；新增检索profile隔离/BM25+候选约束、Bad Case解释、动态分块版本、稳定RRF平分、盲审导出和有界Agent Loop测试，以及索引重建、HTTP回环、StateGraph证据和Function Calling协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 首轮为`1 failed, 67 passed`，失败项是未改动的子进程PID文件时序测试；单独复跑通过，全量复跑通过`68 passed, 74 warnings`。新增有界Agent Loop、Memory准入/隔离/并发版本和Tool会话关联测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |

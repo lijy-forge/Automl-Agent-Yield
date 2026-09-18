@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-from yieldmind.database import YieldMindStore
+from yieldmind.database import YieldMindStore, connect
 from yieldmind.safety import RedactRequest, redact_payload
 from yieldmind.tools import ToolRegistry, registry_for_workspace
 
@@ -37,6 +37,8 @@ class ToolCallItem(BaseModel):
 class ToolPlanRequest(BaseModel):
     prompt: str
     data_path: str = ""
+    session_id: str = ""
+    turn_id: str = ""
     allow_live_llm: bool = False
     llm: str = "ark"
     max_tool_calls: int = Field(default=4, ge=1, le=12)
@@ -273,6 +275,27 @@ def _response_usage(response: Any) -> dict[str, int]:
     }
 
 
+def _validate_session_turn(store: YieldMindStore, request: ToolPlanRequest) -> None:
+    if request.turn_id and not request.session_id:
+        raise ToolCallProtocolError("turn_id requires session_id.")
+    if not request.session_id:
+        return
+    with connect(store.db_path) as conn:
+        session = conn.execute(
+            "SELECT session_id FROM yieldmind_sessions WHERE session_id=?",
+            (request.session_id,),
+        ).fetchone()
+        if not session:
+            raise ToolCallProtocolError(f"Unknown session_id: {request.session_id}")
+        if request.turn_id:
+            turn = conn.execute(
+                "SELECT turn_id FROM yieldmind_turns WHERE turn_id=? AND session_id=?",
+                (request.turn_id, request.session_id),
+            ).fetchone()
+            if not turn:
+                raise ToolCallProtocolError("turn_id does not belong to session_id.")
+
+
 def _parse_live_tool_calls(message: Any, registry: ToolRegistry, *, max_tool_calls: int) -> list[ToolCallItem]:
     raw_calls = list(getattr(message, "tool_calls", None) or [])
     if len(raw_calls) > max_tool_calls:
@@ -395,6 +418,7 @@ def execute_plan(
 ) -> ToolExecutionResult:
     store = store or YieldMindStore()
     registry = registry or registry_for_workspace(store=store)
+    _validate_session_turn(store, request)
     active_run_id = run_id or store.create_run(
         mode=(
             SIMULATED_TEST_ADAPTER
@@ -412,6 +436,8 @@ def execute_plan(
             "max_steps": request.max_steps,
             "max_tool_calls": request.max_tool_calls,
             "max_repeated_tool_calls": request.max_repeated_tool_calls,
+            "session_id": request.session_id,
+            "turn_id": request.turn_id,
         },
     )
     if not request.allow_live_llm:
@@ -419,7 +445,13 @@ def execute_plan(
         results: list[dict[str, Any]] = []
         for call in plan.tool_calls:
             started = time.time()
-            result = registry.execute(call.tool_name, call.args, run_id=active_run_id)
+            result = registry.execute(
+                call.tool_name,
+                call.args,
+                run_id=active_run_id,
+                session_id=request.session_id,
+                turn_id=request.turn_id,
+            )
             payload = result.model_dump()
             payload.update(
                 {
@@ -549,6 +581,8 @@ def execute_plan(
                     call.tool_name,
                     call.args,
                     run_id=active_run_id,
+                    session_id=request.session_id,
+                    turn_id=request.turn_id,
                     idempotency_key=f"agent-loop:{active_run_id}:{fingerprint}",
                 )
                 executed_tool_calls += 1

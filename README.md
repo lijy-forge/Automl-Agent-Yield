@@ -107,6 +107,14 @@ reason. Every step records its outcome, tool fingerprints, counters, stop
 reason, and provider-reported token usage when available. Injected protocol-test
 clients are recorded as simulated calls, never as real model calls.
 
+Session memory separates current-session constraints from confirmed workspace
+memory. Constraint changes use an optimistic `constraint_version`; stale API
+updates return HTTP 409 instead of overwriting newer instructions. Candidate
+workspace memories stay out of context until confirmed, and successful
+experience memories require a real `passed` source run. Summaries retain the
+last covered `turn_id`, while Agent Loop tool records carry both `session_id`
+and `turn_id` for traceability.
+
 Qwen3 Embedding runs in a separate Python environment because its required
 `tokenizers>=0.21` conflicts with Chroma 0.5.23 in the main environment. The
 model process only serves normalized vectors on loopback; Chroma and database

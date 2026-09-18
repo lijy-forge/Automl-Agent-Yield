@@ -185,6 +185,7 @@ def initialize_db(db_path: str | Path | None = None) -> Path:
         for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
             conn.executescript(migration.read_text(encoding="utf-8"))
         _ensure_optional_columns(conn)
+        _ensure_memory_optional_columns(conn)
         _ensure_task_optional_columns(conn)
     return path
 
@@ -222,6 +223,37 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS uq_yieldmind_tool_calls_idempotency
         ON yieldmind_tool_calls(idempotency_key)
         WHERE idempotency_key <> ''
+        """
+    )
+
+
+def _ensure_memory_optional_columns(conn: sqlite3.Connection) -> None:
+    """Keep existing SQLite session and memory databases readable after additive upgrades."""
+    table_additions = {
+        "yieldmind_sessions": {
+            "workspace_id": "TEXT NOT NULL DEFAULT 'default'",
+            "constraint_version": "INTEGER NOT NULL DEFAULT 0",
+            "summary_through_turn_id": "TEXT NOT NULL DEFAULT ''",
+        },
+        "yieldmind_turns": {
+            "constraint_version": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "yieldmind_memories": {
+            "workspace_id": "TEXT NOT NULL DEFAULT 'default'",
+            "validation_status": "TEXT NOT NULL DEFAULT 'confirmed'",
+            "source_run_id": "TEXT NOT NULL DEFAULT ''",
+            "applicability_json": "TEXT NOT NULL DEFAULT '{}'",
+        },
+    }
+    for table, additions in table_additions.items():
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, ddl in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_yieldmind_memories_context
+        ON yieldmind_memories(workspace_id, session_id, scope, validation_status, status)
         """
     )
 
@@ -493,6 +525,8 @@ class YieldMindStore:
         args: dict[str, Any],
         idempotency_key: str,
         run_id: str | None = None,
+        session_id: str | None = None,
+        turn_id: str | None = None,
         started_at: float | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Atomically reserve an idempotent tool call before side effects run."""
@@ -528,8 +562,8 @@ class YieldMindStore:
                         json_dumps(args),
                         "{}",
                         "",
-                        "",
-                        "",
+                        str(session_id or ""),
+                        str(turn_id or ""),
                         idempotency_key,
                     ),
                 )
