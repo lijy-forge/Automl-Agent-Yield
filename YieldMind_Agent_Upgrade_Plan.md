@@ -413,6 +413,22 @@
   - 完整本地报告：`agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_114855.json`；Git精简结果：`evals/results/yieldmind_qwen3_retrieval_diagnostics_20260918.json`。
   - 决策：当前不增加reranker。先扩大真实用户查询并完成独立标签复核，再在固定case上比较收益和延迟，避免对单人自建标签过拟合。
 
+### 阶段 22：分块版本一致性与盲审标注包
+
+- 状态：分块/RRF稳定性修正、盲审工具和`reviewer_1`空白标注包已完成；150行人工标签尚未填写，第二标注人及争议裁决尚未开始。
+- 执行前核查：
+  - 真实检索使用`chunk_size=700/chunk_overlap=80`，旧报告却固定记录`recursive_chars_1200_180_v1`；文本和阶段21指标未因此变化，但索引身份与复现说明不正确。
+  - 修正分块版本后首次复跑发现一个RRF平分case会随chunk ID哈希换序；根因是平分时使用不具语义的chunk ID排序，而不是Qwen推理变化。
+- 实现：
+  - 分块版本改为由真实参数生成；重复入库只有在文档、index和split version均一致时才幂等复用，改变分块配置会重建并清理旧向量。
+  - RRF平分依次按通道数、最佳通道名次、名次和、来源路径及chunk序号稳定排序，并在诊断报告中记录各通道名次。
+  - 新增`scripts/prepare_yieldmind_retrieval_review.py`及Pydantic行Schema；候选和case固定随机打乱，公开CSV不含来源、排名、分数和原标签，私有映射保存在Git忽略目录。
+  - 已生成`evals/review/yieldmind_retrieval_review_reviewer_1.csv`和说明`evals/review/README.md`；脚本拒绝覆盖已存在CSV，避免误删人工结果。
+- 真实验证：
+  - 最终Qwen报告为`agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_121005.json`，SHA-256=`3718871a6dff7f000a953169c5ded5c955a88e2c56fadabe9a0b69d4b34ff59e`。
+  - 报告明确记录`recursive_chars_700_80_v1`、7篇文档/20个chunk、67次encode/80条文本；hybrid质量仍为`1.0000/0.8861/0.8000`。
+  - CSV结构检查为30个case、150行、150个空relevance和confidence；不存在source/rank/score列。当前只能称“标注包已准备”，不能称“人工评测已完成”。
+
 ## 本轮验证结果
 
 验证环境：`/opt/anaconda3/envs/amla/bin/python`
@@ -421,7 +437,7 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 通过，`58 passed, 70 warnings`；新增检索profile隔离/BM25+候选约束与Bad Case解释、索引重建、30条数据集约束、HTTP embedding/API回环与代理隔离、StateGraph证据接入/无证据失败、服务端运行时选择及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 通过，`60 passed, 74 warnings`；新增检索profile隔离/BM25+候选约束、Bad Case解释、动态分块版本、稳定RRF平分和盲审导出测试，以及索引重建、HTTP回环、StateGraph证据和Function Calling协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |

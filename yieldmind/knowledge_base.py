@@ -36,11 +36,26 @@ QWEN3_QUERY_INSTRUCTION = (
     "Instruct: Given a query about yield-stress modeling and the YieldMind system, "
     "retrieve relevant passages that answer the query\nQuery:"
 )
-SPLIT_VERSION = "recursive_chars_1200_180_v1"
 SUPPORTED_SUFFIXES = {".md", ".txt"}
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 LATIN_TOKEN_RE = re.compile(r"[a-z0-9_]+", re.IGNORECASE)
 CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
+
+
+def split_version_for(chunk_size: int, chunk_overlap: int) -> str:
+    return f"recursive_chars_{int(chunk_size)}_{int(chunk_overlap)}_v1"
+
+
+SPLIT_VERSION = split_version_for(1200, 180)
+
+
+def split_knowledge_text(text: str, *, chunk_size: int, chunk_overlap: int) -> list[str]:
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n## ", "\n# ", "\n\n", "\n", "。", ". ", " ", ""],
+    )
+    return [chunk for chunk in splitter.split_text(text) if chunk.strip()]
 
 
 class EmbeddingProfile(BaseModel):
@@ -394,16 +409,12 @@ class KnowledgeBase:
         )
 
     def _split(self, text: str, *, chunk_size: int, chunk_overlap: int) -> list[str]:
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            separators=["\n## ", "\n# ", "\n\n", "\n", "。", ". ", " ", ""],
-        )
-        return [chunk for chunk in splitter.split_text(text) if chunk.strip()]
+        return split_knowledge_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
     def ingest(self, request: KnowledgeIngestRequest) -> dict[str, Any]:
         self._validate_index_version(request.index_version)
         collection = self._collection()
+        split_version = split_version_for(request.chunk_size, request.chunk_overlap)
         results: list[dict[str, Any]] = []
         for raw_path in request.paths:
             path = Path(raw_path).expanduser().resolve()
@@ -417,14 +428,20 @@ class KnowledgeBase:
                 document_version = document_hash[:16]
                 document_id = _stable_id(str(path), document_hash, request.index_version, prefix="doc_")
                 existing = self.get_document(document_id)
-                indexed = False
+                stored_ids: list[str] = []
+                stored_split_versions: set[str] = set()
                 if existing and existing.get("status") == "available":
                     stored = collection.get(
                         where=_chroma_where(request.index_version, document_id),
-                        limit=1,
+                        include=["metadatas"],
                     )
-                    indexed = bool(stored.get("ids"))
-                if existing and existing.get("status") == "available" and indexed:
+                    stored_ids = [str(value) for value in (stored.get("ids") or [])]
+                    stored_split_versions = {
+                        str(metadata.get("split_version") or "")
+                        for metadata in (stored.get("metadatas") or [])
+                    }
+                split_is_current = bool(stored_ids) and stored_split_versions == {split_version}
+                if existing and existing.get("status") == "available" and split_is_current:
                     results.append({**existing, "status": "available", "idempotent": True})
                     continue
 
@@ -436,7 +453,7 @@ class KnowledgeBase:
                 db_rows: list[tuple[Any, ...]] = []
                 for idx, chunk in enumerate(chunks):
                     text_hash = _sha256_text(chunk)
-                    chunk_id = _stable_id(document_id, document_version, SPLIT_VERSION, idx, text_hash, prefix="chk_")
+                    chunk_id = _stable_id(document_id, document_version, split_version, idx, text_hash, prefix="chk_")
                     ids.append(chunk_id)
                     documents.append(chunk)
                     metadata = {
@@ -448,7 +465,7 @@ class KnowledgeBase:
                         "source_path": str(path),
                         "text_hash": text_hash,
                         "index_version": request.index_version,
-                        "split_version": SPLIT_VERSION,
+                        "split_version": split_version,
                     }
                     metadatas.append(metadata)
                     db_rows.append(
@@ -470,6 +487,9 @@ class KnowledgeBase:
                 embeddings = self.embedding.embed_documents(documents)
                 if ids:
                     collection.upsert(ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings)
+                stale_ids = sorted(set(stored_ids).difference(ids))
+                if stale_ids:
+                    collection.delete(ids=stale_ids)
                 with connect(self.store.db_path) as conn:
                     conn.execute(
                         """
@@ -547,7 +567,9 @@ class KnowledgeBase:
             "embedding_profile": self.embedding_profile.model_dump(mode="json"),
             "embedding_profile_fingerprint": self.embedding_profile.fingerprint(),
             "embedding_model": self.embedding_profile.model_id,
-            "split_version": SPLIT_VERSION,
+            "split_version": split_version,
+            "chunk_size": request.chunk_size,
+            "chunk_overlap": request.chunk_overlap,
             "documents": results,
         }
 
@@ -681,19 +703,36 @@ class KnowledgeBase:
         by_id: dict[str, dict[str, Any]] = {}
         scores: dict[str, float] = {}
         channels: dict[str, list[str]] = {}
+        channel_ranks: dict[str, dict[str, int]] = {}
         for channel, hits in (("vector", vector_hits), ("bm25", bm25_hits)):
             for rank, hit in enumerate(hits, start=1):
                 chunk_id = str(hit["chunk_id"])
                 by_id.setdefault(chunk_id, hit.copy())
                 scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (60 + rank)
                 channels.setdefault(chunk_id, []).append(channel)
-        ranked_ids = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))[:top_k]
+                channel_ranks.setdefault(chunk_id, {})[channel] = rank
+
+        def rank_key(chunk_id: str) -> tuple[Any, ...]:
+            ranks = list(channel_ranks[chunk_id].values())
+            hit = by_id[chunk_id]
+            return (
+                -scores[chunk_id],
+                -len(ranks),
+                min(ranks),
+                sum(ranks),
+                str(hit.get("source_path") or ""),
+                int(hit.get("chunk_index") or 0),
+                chunk_id,
+            )
+
+        ranked_ids = sorted(scores, key=rank_key)[:top_k]
         result = []
         for chunk_id in ranked_ids:
             hit = by_id[chunk_id]
             hit["score"] = scores[chunk_id]
             hit["distance"] = None
             hit["retrieval_channels"] = channels[chunk_id]
+            hit["retrieval_channel_ranks"] = channel_ranks[chunk_id]
             result.append(hit)
         return result
 
@@ -805,6 +844,7 @@ def evaluate_retrieval(
                     "missing_terms": missing_terms,
                     "score": hit.get("score"),
                     "retrieval_channels": hit.get("retrieval_channels", []),
+                    "retrieval_channel_ranks": hit.get("retrieval_channel_ranks", {}),
                 }
             )
             if source_matches and terms_match and rank is None:

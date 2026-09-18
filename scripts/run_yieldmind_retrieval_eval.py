@@ -173,6 +173,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "document_count": len(ingest["documents"]),
             "chunk_count": sum(int(item.get("chunk_count", 0)) for item in ingest["documents"]),
             "split_version": ingest["split_version"],
+            "chunk_size": ingest["chunk_size"],
+            "chunk_overlap": ingest["chunk_overlap"],
             "collection": ingest["collection"],
             "duration_seconds": round(ingest_duration_seconds, 4),
         },

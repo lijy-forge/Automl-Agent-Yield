@@ -127,12 +127,12 @@ following results (Recall@5 / MRR / citation accuracy@1 / mean query latency):
 
 | Retrieval | Metrics |
 | --- | --- |
-| Qwen3 vector | `0.9667 / 0.7789 / 0.6667 / 538.2 ms` |
-| BM25+ | `0.8000 / 0.8000 / 0.8000 / 3.0 ms` |
-| Qwen3 + BM25+ RRF | `1.0000 / 0.8861 / 0.8000 / 444.5 ms` |
+| Qwen3 vector | `0.9667 / 0.7789 / 0.6667 / 405.1 ms` |
+| BM25+ | `0.8000 / 0.8000 / 0.8000 / 3.3 ms` |
+| Qwen3 + BM25+ RRF | `1.0000 / 0.8861 / 0.8000 / 402.3 ms` |
 
 The model service peaked at about `3.90 GB` RSS; indexing 20 chunks took
-`16.08s`, excluding model loading. These are results on a small, single-author,
+`14.35s`, excluding model loading. These are results on a small, single-author,
 repository-specific set, not production-quality evidence. Hashing remains the
 deterministic offline default; Qwen3 hybrid retrieval is the measured quality
 candidate while the benchmark is expanded and independently reviewed.
@@ -144,6 +144,14 @@ and changed one case from rank 3 to rank 1; the detailed before/after evidence
 is in `evals/results/yieldmind_qwen3_retrieval_diagnostics_20260918.json`.
 Candidate-level diagnostics retain source/chunk identity and term-match flags
 without copying source text or absolute paths into the report.
+
+The first blind-review sheet is at
+`evals/review/yieldmind_retrieval_review_reviewer_1.csv`. It contains 30
+queries and five shuffled candidates per query. Reviewers see query and
+candidate text but not source, retrieval rank, score, or the original labels.
+Only `relevance`, `confidence`, and `notes` should be edited; the rubric is in
+`evals/review/README.md`. The sheet is intentionally empty and is not counted
+as a completed human evaluation.
 
 To exercise Qwen retrieval inside the actual deterministic StateGraph, start
 the loopback embedding service and PostgreSQL/Redis, then run:
