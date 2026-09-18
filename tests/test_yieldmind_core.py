@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import subprocess
 import sys
@@ -1179,6 +1180,7 @@ def test_retrieval_review_pack_is_blind_and_not_overwritten(tmp_path: Path) -> N
     assert summary["row_count"] == 1
     assert rows[0]["relevance"] == ""
     assert rows[0]["candidate_text"] == "Relevant evidence for the review candidate."
+    assert rows[0]["query_zh"] == ""
     assert "source_path" not in rows[0]
     assert "retrieval_rank" not in rows[0]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1187,6 +1189,27 @@ def test_retrieval_review_pack_is_blind_and_not_overwritten(tmp_path: Path) -> N
     assert "只编辑 CSV" in instructions_path.read_text(encoding="utf-8")
     with pytest.raises(FileExistsError, match="will not be overwritten"):
         prepare_review_pack(**kwargs)
+
+    text_hash = hashlib.sha256(rows[0]["candidate_text"].encode("utf-8")).hexdigest()
+    translated = prepare_review_pack(
+        **kwargs,
+        translations={text_hash: "与问题相关的中文辅助翻译。"},
+        query_translations={"case_1": "哪些证据是相关的？"},
+        overwrite_unlabeled=True,
+    )
+    with output_csv.open(encoding="utf-8-sig", newline="") as handle:
+        translated_rows = list(csv.DictReader(handle))
+    assert translated["row_count"] == 1
+    assert translated_rows[0]["query_zh"] == "哪些证据是相关的？"
+    assert translated_rows[0]["candidate_text_zh"] == "与问题相关的中文辅助翻译。"
+
+    translated_rows[0]["relevance"] = "2"
+    with output_csv.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=translated_rows[0], lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(translated_rows)
+    with pytest.raises(ValueError, match="contains labels"):
+        prepare_review_pack(**kwargs, overwrite_unlabeled=True)
 
 
 def test_safety_redaction_and_budget_tools(tmp_path: Path) -> None:

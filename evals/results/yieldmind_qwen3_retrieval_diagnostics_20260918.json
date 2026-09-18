@@ -98,6 +98,11 @@
     "reviewer_id": "reviewer_1",
     "case_count": 30,
     "row_count": 150,
+    "bilingual_queries": true,
+    "bilingual_candidate_text": true,
+    "translation_language": "zh-CN",
+    "machine_translation_assistance": true,
+    "authoritative_text": "candidate_text",
     "path": "evals/review/yieldmind_retrieval_review_reviewer_1.csv"
   },
   "full_local_report": {
@@ -109,6 +114,7 @@
   "limitations": [
     "Labels are single-author repository-specific judgments, not an external literature benchmark.",
     "Candidate diagnostics identify ranking mechanics but do not determine semantic relevance without independent review.",
+    "Chinese candidate text is a machine-assisted reading aid, not an independent label; English remains authoritative.",
     "Latency values are single-run CPU observations and not throughput or concurrency measurements."
   ]
 }

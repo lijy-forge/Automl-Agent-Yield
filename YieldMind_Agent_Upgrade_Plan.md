@@ -415,7 +415,7 @@
 
 ### 阶段 22：分块版本一致性与盲审标注包
 
-- 状态：分块/RRF稳定性修正、盲审工具和`reviewer_1`空白标注包已完成；150行人工标签尚未填写，第二标注人及争议裁决尚未开始。
+- 状态：分块/RRF稳定性修正、盲审工具和`reviewer_1`中英对照空白标注包已完成；150行人工标签尚未填写，第二标注人及争议裁决尚未开始。
 - 执行前核查：
   - 真实检索使用`chunk_size=700/chunk_overlap=80`，旧报告却固定记录`recursive_chars_1200_180_v1`；文本和阶段21指标未因此变化，但索引身份与复现说明不正确。
   - 修正分块版本后首次复跑发现一个RRF平分case会随chunk ID哈希换序；根因是平分时使用不具语义的chunk ID排序，而不是Qwen推理变化。
@@ -423,11 +423,12 @@
   - 分块版本改为由真实参数生成；重复入库只有在文档、index和split version均一致时才幂等复用，改变分块配置会重建并清理旧向量。
   - RRF平分依次按通道数、最佳通道名次、名次和、来源路径及chunk序号稳定排序，并在诊断报告中记录各通道名次。
   - 新增`scripts/prepare_yieldmind_retrieval_review.py`及Pydantic行Schema；候选和case固定随机打乱，公开CSV不含来源、排名、分数和原标签，私有映射保存在Git忽略目录。
-  - 已生成`evals/review/yieldmind_retrieval_review_reviewer_1.csv`和说明`evals/review/README.md`；脚本拒绝覆盖已存在CSV，避免误删人工结果。
+  - 已生成`evals/review/yieldmind_retrieval_review_reviewer_1.csv`和说明`evals/review/README.md`；30个问题按case ID、20个唯一候选chunk按固定hash映射提供中文辅助译文，英文原文仍是裁决依据。
+  - 脚本默认拒绝覆盖已存在CSV；只有显式指定时才能重建完全未标注的表，任一标签或备注存在时均拒绝覆盖。
 - 真实验证：
   - 最终Qwen报告为`agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_121005.json`，SHA-256=`3718871a6dff7f000a953169c5ded5c955a88e2c56fadabe9a0b69d4b34ff59e`。
   - 报告明确记录`recursive_chars_700_80_v1`、7篇文档/20个chunk、67次encode/80条文本；hybrid质量仍为`1.0000/0.8861/0.8000`。
-  - CSV结构检查为30个case、150行、150个空relevance和confidence；不存在source/rank/score列。当前只能称“标注包已准备”，不能称“人工评测已完成”。
+  - CSV结构检查为30个case、150行，问题和候选文本均有中英对照，150个空relevance和confidence；不存在source/rank/score列。当前只能称“双语标注包已准备”，中文机器辅助翻译不等于第二人标注，不能称“人工评测已完成”。
 
 ## 本轮验证结果
 
