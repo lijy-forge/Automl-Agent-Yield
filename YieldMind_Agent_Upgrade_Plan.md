@@ -21,7 +21,7 @@
 | LangGraph 编排 | StateGraph 节点、边和状态管理 | 原 `run_yield.py` 为自定义状态机 | 新增 `yieldmind.workflow`，安装并验证 `langgraph<0.3` 后可走真实 `langgraph_stategraph` |
 | 执行隔离 | 工具/代码执行受限、超时、轨迹记录 | 原 OperationAgent 有进程超时，dashboard 用 subprocess | 新增 `SubprocessSandbox`：无 shell、Python 入口白名单、仓库内 cwd、最小环境、超时终止 |
 | 评测 | 不虚构结果，明确模拟/真实调用 | 原有模型/候选 benchmark，但缺 Agent 工具层回归集 | 新增数据集驱动离线评测；报告明确 `real_llm_calls=0`、`simulated_model_calls=0` |
-| RAG/知识库 | Chroma、LangChain 切分、可追溯引用 | 原有 `utils/embeddings.py` 使用 FAISS/BM25/BGE，但没有主流程知识库服务 | 已有版本隔离 Chroma、BM25+、RRF hybrid、30条标注查询与embedding profile；当前实测仍为本地hashing，Qwen未验证 |
+| RAG/知识库 | Chroma、LangChain 切分、可追溯引用 | 原有 `utils/embeddings.py` 使用 FAISS/BM25/BGE，但没有主流程知识库服务 | 已有版本隔离 Chroma、BM25+、RRF hybrid、30条标注查询；Qwen3已完成独立CPU评测并通过显式`retrieve_evidence`节点接入确定性StateGraph |
 | 多轮会话/Memory | 会话、跨轮约束、记忆删除 | 原项目以单次运行与文件产物为主 | 新增 session/turn/memory 表和 API；支持约束继承、幂等消息、后续 run 创建 |
 | 安全与证据约束 | 脱敏、上下文预算、引用可校验 | 原主流程有部分 guardrails，但缺统一工具层安全控制 | 新增 `redact_sensitive_payload`、`plan_token_budget`、`validate_evidence_refs`，工具调用日志入库前统一脱敏 |
 | 展示 | 可查看工具、运行和事件 | 原 Flask 页面服务于旧主流程 | 新增 FastAPI 静态展示页，保留原 Flask dashboard |
@@ -349,6 +349,22 @@
   - Qwen3显著提高Recall@5，和BM25+融合后本集合Recall@5达到1.0；但纯向量Top-1准确率低于BM25+，且CPU平均延迟约高两个数量级。因此当前不把纯Qwen向量设为生产默认，保留离线hashing回归及BM25+，将Qwen3+RRF作为需扩大数据后复核的质量候选。
   - 30条case是单人标注的项目内集合，不能外推为生产RAG效果；BGE-M3和reranker尚未同口径实测，也不应凭模型榜单宣称优于当前方案。
 
+### 阶段 18：Qwen3检索接入StateGraph主流程
+
+- 状态：已完成显式可选接入和真实PostgreSQL集成验收；默认离线工作流仍不依赖Qwen服务。
+- 实现：
+  - `ToolRegistry`支持注入指定`KnowledgeBase`，`search_knowledge`和入库工具不再私自固定为hashing profile。
+  - `WorkflowRequest`新增显式知识检索开关、查询、Top-K、索引版本和检索模式；StateGraph在数据分析后增加`retrieve_evidence`节点。
+  - 检索节点调用注册工具后，以`chunk_id/text_hash/index_version/document_id/document_version`执行证据校验；无命中、服务异常或引用校验失败时进入明确失败终态，不静默回退hashing。
+  - 报告工具新增结构化`evidence_refs`，Markdown/JSON报告均可定位chunk来源；Chroma目录不再被错误登记为可下载文件产物。
+  - 新增`scripts/run_yieldmind_qwen_workflow_smoke.py`，串联Qwen入库、混合检索、引用校验、确定性建模、产物验收与报告。
+- 真实验证：
+  - 完整本地报告：`agent_workspace/yieldmind/qwen_workflow_smoke/20260918_110331/qwen_workflow_smoke.json`；Git精简结果：`evals/results/yieldmind_qwen3_workflow_20260918.json`。
+  - 11项检查全部为true；工作流为`langgraph_stategraph`，checkpointer为`langgraph_postgres`并写入11条checkpoint，Redis健康检查通过。
+  - 7篇文档、20个chunk真实执行8次Qwen encode并编码21条文本；混合检索返回5条引用且元数据校验通过，报告包含结构化证据。
+  - 本阶段`real_llm_calls=0`、`simulated_model_calls=0`：证明真实embedding和工具/图编排接线，不代表真实LLM完成了工具选择。
+  - 初次定向测试发现检索工具把Chroma目录误登记为文件产物，导致artifact guardrail拒绝流程；修正Tool契约后定向测试和真实集成均通过。
+
 ## 本轮验证结果
 
 验证环境：`/opt/anaconda3/envs/amla/bin/python`
@@ -357,7 +373,7 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 通过，`51 passed, 48 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束、HTTP embedding回环/代理隔离及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 通过，`53 passed, 60 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束、HTTP embedding回环/代理隔离、StateGraph证据接入/无证据失败及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |

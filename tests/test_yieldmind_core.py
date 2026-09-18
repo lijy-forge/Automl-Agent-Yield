@@ -709,6 +709,44 @@ def test_workflow_runs_with_local_fallback(tmp_path: Path) -> None:
     assert [item["stage"] for item in persisted_stages] == [item["stage"] for item in result["stages"]]
 
 
+def test_workflow_retrieves_and_reports_validated_evidence(tmp_path: Path) -> None:
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    document = tmp_path / "mechanism.md"
+    document.write_text(
+        "# Mechanism\n\nYODEL links yield stress to maximum packing phi_m and contact networks.",
+        encoding="utf-8",
+    )
+    knowledge_base = KnowledgeBase(
+        store=store,
+        chroma_dir=tmp_path / "chroma",
+        collection_name="workflow_evidence",
+    )
+    knowledge_base.ingest(
+        KnowledgeIngestRequest(paths=[str(document)], chunk_size=300, chunk_overlap=20)
+    )
+    registry = ToolRegistry(store=store, knowledge_base=knowledge_base)
+    result = run_workflow(
+        WorkflowRequest(
+            n_samples=20,
+            n_splits=2,
+            use_knowledge=True,
+            knowledge_query="YODEL phi_m contact network",
+        ),
+        store=store,
+        registry=registry,
+    )
+
+    assert result["status"] == "passed", result.get("errors")
+    assert result["evidence_refs"]
+    assert result["evidence_summary"]["validation_ok"] is True
+    assert result["evidence_summary"]["embedding_model"] == "local_hashing_v1"
+    assert {item["tool"] for item in result["tool_results"]}.issuperset(
+        {"search_knowledge", "validate_evidence_refs"}
+    )
+    report = json.loads(Path(result["artifacts"]["report_json"]).read_text(encoding="utf-8"))
+    assert report["evidence_refs"] == result["evidence_refs"]
+
+
 def test_workflow_stops_cooperatively_at_node_boundary_and_links_run(tmp_path: Path) -> None:
     store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
     registry = _FlakyWorkflowRegistry()
@@ -772,6 +810,21 @@ class _FlakyWorkflowRegistry:
         raise AssertionError(f"Unexpected tool: {name}")
 
 
+class _NoEvidenceWorkflowRegistry(_FlakyWorkflowRegistry):
+    def execute(
+        self,
+        name: str,
+        args: dict,
+        *,
+        run_id: str | None = None,
+        idempotency_key: str = "",
+    ) -> ToolResult:
+        if name == "search_knowledge":
+            self.calls.append(name)
+            return ToolResult(ok=True, result={"hits": [], "embedding_model": "test_embedding"})
+        return super().execute(name, args, run_id=run_id, idempotency_key=idempotency_key)
+
+
 def test_workflow_uses_conditional_local_repair(tmp_path: Path) -> None:
     store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
     registry = _FlakyWorkflowRegistry()
@@ -786,6 +839,25 @@ def test_workflow_uses_conditional_local_repair(tmp_path: Path) -> None:
     persisted = store.list_stage_executions(result["run_id"])
     assert [item["stage"] for item in persisted].count("candidate_benchmark") == 2
     assert any(item["stage"] == "local_repair" for item in persisted)
+
+
+def test_workflow_fails_closed_when_required_evidence_is_missing(tmp_path: Path) -> None:
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    registry = _NoEvidenceWorkflowRegistry()
+    result = YieldMindWorkflow(store=store, registry=registry).run(
+        WorkflowRequest(
+            n_samples=20,
+            n_splits=2,
+            use_knowledge=True,
+            knowledge_query="unsupported mechanism claim",
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert result["failed_stage"] == "retrieve_evidence"
+    assert result["evidence_refs"] == []
+    assert "Knowledge search returned no evidence" in result["errors"][0]
+    assert registry.calls == ["generate_demo_yield_data", "profile_yield_data", "search_knowledge"]
 
 
 def test_workflow_rejects_missing_user_data_without_demo_fallback(tmp_path: Path) -> None:

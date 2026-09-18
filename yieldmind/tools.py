@@ -118,10 +118,20 @@ class VerifyArtifactsArgs(BaseModel):
     require_json: list[str] = Field(default_factory=list)
 
 
+class ReportEvidenceRef(BaseModel):
+    chunk_id: str
+    text_hash: str
+    index_version: str
+    document_id: str = ""
+    document_version: str = ""
+    source_path: str = ""
+
+
 class BuildRunReportArgs(BaseModel):
     title: str = "YieldMind Workflow Report"
     run_id: str = ""
     artifact_paths: dict[str, str] = Field(default_factory=dict)
+    evidence_refs: list[ReportEvidenceRef] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
 
@@ -194,11 +204,16 @@ class ToolRegistry:
         *,
         workspace_root: str | Path | None = None,
         store: YieldMindStore | None = None,
+        knowledge_base: KnowledgeBase | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root or PROJECT_ROOT).resolve()
         self.store = store
+        self.knowledge_base = knowledge_base
         self._tools: dict[str, ToolSpec] = {}
         self._register_defaults()
+
+    def _knowledge_base(self) -> KnowledgeBase:
+        return self.knowledge_base or KnowledgeBase(store=self.store or YieldMindStore())
 
     def _register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
@@ -470,7 +485,7 @@ class ToolRegistry:
 
     def _ingest_knowledge_documents(self, args: BaseModel) -> ToolResult:
         parsed = args if isinstance(args, IngestKnowledgeArgs) else IngestKnowledgeArgs.model_validate(args)
-        kb = KnowledgeBase(store=self.store or YieldMindStore())
+        kb = self._knowledge_base()
         result = kb.ingest(
             KnowledgeIngestRequest(
                 paths=parsed.paths,
@@ -483,13 +498,12 @@ class ToolRegistry:
         return ToolResult(
             ok=not failed,
             result=_jsonable(result),
-            artifacts={"chroma_dir": str(kb.chroma_dir)},
             error="; ".join(str(item.get("error", "")) for item in failed),
         )
 
     def _search_knowledge(self, args: BaseModel) -> ToolResult:
         parsed = args if isinstance(args, SearchKnowledgeArgs) else SearchKnowledgeArgs.model_validate(args)
-        kb = KnowledgeBase(store=self.store or YieldMindStore())
+        kb = self._knowledge_base()
         result = kb.search(
             KnowledgeSearchRequest(
                 query=parsed.query,
@@ -499,7 +513,7 @@ class ToolRegistry:
                 retrieval_mode=parsed.retrieval_mode,
             )
         )
-        return ToolResult(ok=True, result=_jsonable(result), artifacts={"chroma_dir": str(kb.chroma_dir)})
+        return ToolResult(ok=True, result=_jsonable(result))
 
     def _redact_sensitive_payload(self, args: BaseModel) -> ToolResult:
         parsed = args if isinstance(args, RedactRequest) else RedactRequest.model_validate(args)
@@ -751,11 +765,13 @@ class ToolRegistry:
         benchmark_json = artifact_summaries.get("candidate_benchmark_report", {}).get("json", {})
         if isinstance(benchmark_json, dict):
             selected_strategy = benchmark_json.get("selected_strategy_id")
+        evidence_refs = [ref.model_dump(mode="json") for ref in parsed.evidence_refs]
         report = {
             "title": parsed.title,
             "run_id": parsed.run_id,
             "created_at": time.time(),
             "artifact_paths": parsed.artifact_paths,
+            "evidence_refs": evidence_refs,
             "selected_strategy_id": selected_strategy,
             "notes": parsed.notes,
             "artifact_summaries": artifact_summaries,
@@ -775,6 +791,13 @@ class ToolRegistry:
         ]
         for name, path in parsed.artifact_paths.items():
             md_lines.append(f"- `{name}`: `{path}`")
+        if evidence_refs:
+            md_lines.extend(["", "## Evidence"])
+            for ref in evidence_refs:
+                md_lines.append(
+                    f"- `{ref.get('chunk_id', '')}` from `{ref.get('source_path', '')}` "
+                    f"(index `{ref.get('index_version', '')}`)"
+                )
         if parsed.notes:
             md_lines.extend(["", "## Notes"])
             md_lines.extend(f"- {note}" for note in parsed.notes)
@@ -902,5 +925,9 @@ class ToolRegistry:
         )
 
 
-def registry_for_workspace(store: YieldMindStore | None = None) -> ToolRegistry:
-    return ToolRegistry(workspace_root=PROJECT_ROOT, store=store)
+def registry_for_workspace(
+    store: YieldMindStore | None = None,
+    *,
+    knowledge_base: KnowledgeBase | None = None,
+) -> ToolRegistry:
+    return ToolRegistry(workspace_root=PROJECT_ROOT, store=store, knowledge_base=knowledge_base)

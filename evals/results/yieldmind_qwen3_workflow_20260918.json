@@ -1,0 +1,80 @@
+{
+  "status": "passed",
+  "evaluated_at": "2026-09-18",
+  "scenario": "Qwen3 hybrid retrieval inside the deterministic YieldMind StateGraph",
+  "checks": {
+    "workflow_passed": true,
+    "langgraph_stategraph": true,
+    "retrieve_evidence_stage": true,
+    "search_tool_called": true,
+    "evidence_validation_called": true,
+    "evidence_refs_present": true,
+    "evidence_validation_passed": true,
+    "report_contains_evidence": true,
+    "qwen_profile_used": true,
+    "postgres_checkpoints_persisted": true,
+    "redis_reachable": true
+  },
+  "persistence": {
+    "database_backend": "postgresql",
+    "workflow_backend": "langgraph_stategraph",
+    "checkpoint_backend": "langgraph_postgres",
+    "checkpoint_count": 11,
+    "redis_health_ok": true
+  },
+  "embedding": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "dimensions": 1024,
+    "device": "cpu",
+    "profile_fingerprint": "445d787820ef",
+    "retrieval_mode": "hybrid",
+    "real_encode_calls": 8,
+    "real_encoded_texts": 21,
+    "service_peak_rss_bytes": 3903823872
+  },
+  "ingestion": {
+    "documents": 7,
+    "chunks": 20,
+    "duration_seconds": 15.4338
+  },
+  "workflow": {
+    "duration_seconds": 4.5989,
+    "evidence_hit_count": 5,
+    "stages": [
+      "start",
+      "prepare_data",
+      "profile",
+      "retrieve_evidence",
+      "evaluate",
+      "candidate_benchmark",
+      "verify_artifacts",
+      "report",
+      "finish"
+    ],
+    "tool_names": [
+      "generate_demo_yield_data",
+      "profile_yield_data",
+      "search_knowledge",
+      "validate_evidence_refs",
+      "run_fixed_baseline_eval",
+      "run_candidate_benchmark",
+      "verify_artifacts",
+      "build_run_report"
+    ]
+  },
+  "model_call_accounting": {
+    "real_llm_calls": 0,
+    "simulated_model_calls": 0
+  },
+  "full_local_report": {
+    "path": "agent_workspace/yieldmind/qwen_workflow_smoke/20260918_110331/qwen_workflow_smoke.json",
+    "sha256": "6446f688ae56b9b63f4601bf583cabb8c50962e4accbb988b502bb20aef5072f",
+    "tracked_by_git": false
+  },
+  "limitations": [
+    "The modeling workflow is deterministic and uses real Qwen embeddings, but it does not call an LLM.",
+    "The knowledge sources are repository-maintained project documents, not an independently reviewed literature corpus.",
+    "Redis health was verified, but this synchronous smoke did not claim Celery queue consumption."
+  ]
+}

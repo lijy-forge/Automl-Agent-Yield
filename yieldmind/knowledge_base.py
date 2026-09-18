@@ -29,6 +29,13 @@ from yieldmind.database import PROJECT_ROOT, YieldMindStore, connect, json_dumps
 DEFAULT_INDEX_VERSION = "yieldmind-chroma-hashing-v1"
 DEFAULT_COLLECTION = "yieldmind_domain_v1"
 DEFAULT_CHROMA_DIR = PROJECT_ROOT / "agent_workspace" / "yieldmind" / "chroma"
+QWEN3_MODEL_ID = "Qwen/Qwen3-Embedding-0.6B"
+QWEN3_REVISION = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+QWEN3_INDEX_VERSION = "yieldmind-qwen3-embedding-0.6b-97b0c614-1024-v1"
+QWEN3_QUERY_INSTRUCTION = (
+    "Instruct: Given a query about yield-stress modeling and the YieldMind system, "
+    "retrieve relevant passages that answer the query\nQuery:"
+)
 SPLIT_VERSION = "recursive_chars_1200_180_v1"
 SUPPORTED_SUFFIXES = {".md", ".txt"}
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
@@ -66,6 +73,20 @@ class EmbeddingProfile(BaseModel):
 
 
 DEFAULT_EMBEDDING_PROFILE = EmbeddingProfile()
+
+
+def qwen3_embedding_profile(*, http: bool = True) -> EmbeddingProfile:
+    return EmbeddingProfile(
+        provider="http_sentence_transformers" if http else "sentence_transformers",
+        model_id=QWEN3_MODEL_ID,
+        revision=QWEN3_REVISION,
+        dimensions=1024,
+        normalize=True,
+        metric="cosine",
+        query_instruction=QWEN3_QUERY_INSTRUCTION,
+        document_instruction="",
+        index_version=QWEN3_INDEX_VERSION,
+    )
 
 
 class KnowledgeIngestRequest(BaseModel):
