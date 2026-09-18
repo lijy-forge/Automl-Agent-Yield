@@ -1,0 +1,80 @@
+{
+  "status": "passed",
+  "evaluated_at": "2026-09-18",
+  "scenario": "separate Uvicorn process over loopback TCP with PostgreSQL, Redis, and Qwen3",
+  "transport": "loopback_tcp_http",
+  "unready_scenario": {
+    "http_statuses": {
+      "liveness": 200,
+      "readiness": 503,
+      "knowledge_config": 200
+    },
+    "checks_passed": 7,
+    "checks_total": 7,
+    "database_ready": true,
+    "redis_ready": true,
+    "knowledge_ready": false,
+    "knowledge_error_type": "RuntimeError",
+    "real_embedding_encode_calls": 0,
+    "real_llm_calls": 0
+  },
+  "ready_scenario": {
+    "http_statuses": {
+      "liveness": 200,
+      "readiness": 200,
+      "knowledge_config": 200,
+      "ingest": 200,
+      "direct_search": 200,
+      "tool_search": 200
+    },
+    "checks_passed": 13,
+    "checks_total": 13,
+    "database_backend": "postgresql",
+    "redis_ready": true,
+    "knowledge_ready": true,
+    "embedding": {
+      "model_id": "Qwen/Qwen3-Embedding-0.6B",
+      "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+      "dimensions": 1024,
+      "profile_fingerprint": "445d787820ef",
+      "real_encode_calls": 9,
+      "real_encoded_texts": 22
+    },
+    "ingestion": {
+      "documents": 7,
+      "chunks": 20
+    },
+    "direct_search": {
+      "hit_count": 5,
+      "latency_ms": 453.48
+    },
+    "tool_search": {
+      "hit_count": 5,
+      "latency_ms": 566.556
+    },
+    "real_llm_calls": 0,
+    "simulated_model_calls": 0
+  },
+  "full_local_reports": [
+    {
+      "path": "agent_workspace/yieldmind/qwen_api_http/20260918_113601/qwen_api_http_unready.json",
+      "sha256": "287eeccb7eb4ab24141ae2dc4e8067c7b9cc4e6097bb4eb919abf404191389c0",
+      "tracked_by_git": false
+    },
+    {
+      "path": "agent_workspace/yieldmind/qwen_api_http/20260918_113809/qwen_api_http_ready.json",
+      "sha256": "624865b085c5d28331b64c843f886fbc9023af20086e8280bd70d0a62dcc2440",
+      "tracked_by_git": false
+    }
+  ],
+  "shutdown_verified": {
+    "ports_released": [8072, 8091, 5432, 6379],
+    "postgres_container": "exited (0)",
+    "redis_container": "exited (0)"
+  },
+  "limitations": [
+    "This is one functional HTTP smoke run, not a throughput, concurrency, reverse-proxy, or production network benchmark.",
+    "The smoke validates real Qwen embeddings and Tool Registry routing, not LLM tool selection.",
+    "The unavailable dependency check validates readiness gating, not automatic failover or high availability."
+  ]
+}

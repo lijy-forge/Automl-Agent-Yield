@@ -166,6 +166,24 @@ export YIELDMIND_EMBEDDING_TOKEN=local-only-token
 `GET /health/dependencies` treats the configured embedding service as a
 readiness dependency. The default `local_hashing` profile does not contact it.
 
+To verify a separately running API over TCP, use the loopback-only checker. It
+has a positive mode for ingestion and both search paths, and an
+`--expect-unready` mode for confirming that an unavailable Qwen dependency
+leaves liveness available while readiness returns HTTP 503:
+
+```bash
+YIELDMIND_EMBEDDING_TOKEN=local-only-token \
+  /opt/anaconda3/envs/amla/bin/python scripts/check_yieldmind_qwen_api_http.py \
+  --api-base-url http://127.0.0.1:8072 \
+  --embedding-endpoint http://127.0.0.1:8091
+
+/opt/anaconda3/envs/amla/bin/python scripts/check_yieldmind_qwen_api_http.py \
+  --api-base-url http://127.0.0.1:8072 --expect-unready
+```
+
+The checker bypasses system proxies and refuses non-loopback API or embedding
+URLs. It is a functional smoke test, not a load or production-network test.
+
 ## Active Modules
 
 - `run_yield.py`: owns `YieldAgentManager`, the yield-specific manager that

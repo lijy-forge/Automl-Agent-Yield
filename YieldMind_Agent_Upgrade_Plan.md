@@ -381,6 +381,21 @@
   - 使用FastAPI TestClient执行真实路由函数和真实外部依赖，不宣称独立HTTP进程吞吐；`real_llm_calls=0`，不宣称真实LLM工具选择。
   - 安全审阅发现初版公开配置返回Chroma绝对路径；修正为仅返回`chroma_dir_configured`后重新完成9项真实联调。最终单次直接/Tool搜索延迟分别为`735.9ms/922.7ms`，不选择性保留更低的旧轮次数字。
 
+### 阶段 20：独立FastAPI进程与Qwen3 HTTP验收
+
+- 状态：已完成。补齐阶段19仅使用TestClient的限制，使用独立Uvicorn进程和真实回环TCP请求验证正反两条依赖链路。
+- 实现：
+  - 新增`scripts/check_yieldmind_qwen_api_http.py`，显式绕过系统代理并拒绝非回环API/embedding地址。
+  - 正常模式调用liveness、readiness、knowledge配置、文档入库、直接检索和Tool Registry检索；通过Qwen服务前后计数核对真实embedding调用。
+  - `--expect-unready`模式验证Qwen endpoint不可达时liveness仍可用、readiness返回HTTP 503，并独立核对PostgreSQL/Redis仍健康。
+- 真实验证：
+  - Git精简结果：`evals/results/yieldmind_qwen3_api_http_20260918.json`；完整本地正反报告及SHA-256记录在该文件中。
+  - 故障场景7/7检查通过：`/health=200`、`/health/dependencies=503`、PostgreSQL/Redis健康、knowledge不健康，且embedding/LLM调用均为0。
+  - 正常场景13/13检查通过：6个HTTP endpoint均返回200，7篇文档/20个chunk入库，两条检索路径各返回5条，profile指纹均为`445d787820ef`。
+  - 本轮真实增加9次Qwen encode、22条文本；`real_llm_calls=0`、`simulated_model_calls=0`。
+  - 单次直接/Tool检索观测为`453.5ms/566.6ms`，仅记录本次功能验收，不作为吞吐、并发、反向代理或生产网络性能结论。
+  - 验收后8072、8091、5432、6379端口均已释放，PostgreSQL/Redis容器为`exited (0)`。
+
 ## 本轮验证结果
 
 验证环境：`/opt/anaconda3/envs/amla/bin/python`
@@ -389,11 +404,12 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 通过，`56 passed, 70 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束、HTTP embedding回环/代理隔离、StateGraph证据接入/无证据失败、服务端运行时选择及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 通过，`57 passed, 70 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束、HTTP embedding/API回环与代理隔离、StateGraph证据接入/无证据失败、服务端运行时选择及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |
 | `python scripts/run_yieldmind_qwen_api_smoke.py --embedding-endpoint http://127.0.0.1:8091` | 通过，FastAPI readiness、Qwen入库、直接搜索和Tool搜索9项检查全true；真实9次encode/22条文本，`real_llm_calls=0` |
+| `python scripts/check_yieldmind_qwen_api_http.py --api-base-url http://127.0.0.1:8072 --embedding-endpoint http://127.0.0.1:8091` | 通过，独立Uvicorn/TCP正常场景13/13及Qwen不可达场景7/7检查通过；正向真实9次encode/22条文本，反向readiness=503，`real_llm_calls=0` |
 | `python scripts/check_yieldmind_embedding_capability.py` | 通过；离线确认Qwen3/BGE-M3均未达到本机零变更运行条件，`network_calls=0`、`model_downloads=0`、`model_inference_calls=0` |
 | `python scripts/run_yieldmind_function_calling_smoke.py` | 通过，生成 skipped 报告；`real_llm_calls=0`，未调用真实模型 |
 | `python scripts/run_yieldmind_workflow.py --n-samples 40 --n-splits 2` | 通过，`status=passed`、`workflow_backend=langgraph_stategraph`、`langgraph_available=true` |
@@ -427,6 +443,8 @@ agent_workspace/yieldmind/integrations/postgres_redis_running_cancel_20260918_07
 agent_workspace/yieldmind/integrations/postgres_redis_outage_20260918_071111.json
 agent_workspace/yieldmind/integrations/postgres_redis_recovery_20260918_072715.json
 agent_workspace/yieldmind/integrations/postgres_redis_domain_queue_20260918_085450.json
+agent_workspace/yieldmind/qwen_api_http/20260918_113601/qwen_api_http_unready.json
+agent_workspace/yieldmind/qwen_api_http/20260918_113809/qwen_api_http_ready.json
 ```
 
 评测 case：
