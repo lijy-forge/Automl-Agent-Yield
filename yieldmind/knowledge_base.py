@@ -653,11 +653,15 @@ class KnowledgeBase:
         query_tokens = self._lexical_tokens(request.query)
         if not query_tokens:
             return []
+        query_token_set = set(query_tokens)
+        has_lexical_overlap = [bool(query_token_set.intersection(tokens)) for tokens in tokenized_corpus]
         scores = BM25Plus(tokenized_corpus).get_scores(query_tokens)
         ranked = sorted(enumerate(scores), key=lambda item: (-float(item[1]), item[0]))
         hits: list[dict[str, Any]] = []
         for index, score in ranked:
-            if float(score) <= 0:
+            # BM25Plus adds delta even when a document has zero term overlap.
+            # Such rows are not lexical candidates and must not enter RRF.
+            if not has_lexical_overlap[index] or float(score) <= 0:
                 continue
             row = chunks[index]
             hits.append(
@@ -746,6 +750,16 @@ def evaluate_retrieval(
     top_k: int = 5,
     retrieval_mode: Literal["vector", "bm25", "hybrid"] = "vector",
 ) -> dict[str, Any]:
+    def report_source_path(value: Any) -> str:
+        raw_source = str(value or "")
+        if not raw_source:
+            return ""
+        source = Path(raw_source)
+        try:
+            return str(source.resolve().relative_to(PROJECT_ROOT.resolve()))
+        except ValueError:
+            return source.name
+
     rows = []
     reciprocal_ranks = []
     recalls = []
@@ -763,16 +777,44 @@ def evaluate_retrieval(
             )
         )
         rank = None
+        source_match_rank = None
+        terms_match_rank = None
+        candidate_diagnostics = []
         for idx, hit in enumerate(result["hits"], start=1):
             text = str(hit.get("text") or "").lower()
             source_path = str(hit.get("source_path") or "")
             source_matches = not expected_sources or any(
                 source_path == expected or source_path.endswith(f"/{expected}") for expected in expected_sources
             )
-            terms_match = not expected_terms or all(term in text for term in expected_terms)
-            if source_matches and terms_match:
+            matched_terms = [term for term in expected_terms if term in text]
+            missing_terms = [term for term in expected_terms if term not in text]
+            terms_match = not missing_terms
+            if source_matches and source_match_rank is None:
+                source_match_rank = idx
+            if terms_match and terms_match_rank is None:
+                terms_match_rank = idx
+            candidate_diagnostics.append(
+                {
+                    "rank": idx,
+                    "chunk_id": str(hit.get("chunk_id") or ""),
+                    "source_path": report_source_path(source_path),
+                    "chunk_index": hit.get("chunk_index"),
+                    "source_matches": source_matches,
+                    "terms_match": terms_match,
+                    "matched_terms": matched_terms,
+                    "missing_terms": missing_terms,
+                    "score": hit.get("score"),
+                    "retrieval_channels": hit.get("retrieval_channels", []),
+                }
+            )
+            if source_matches and terms_match and rank is None:
                 rank = idx
-                break
+        if rank is not None:
+            failure_reason = None if rank == 1 else "relevant_chunk_ranked_below_top_1"
+        elif source_match_rank is not None:
+            failure_reason = "expected_source_retrieved_but_terms_not_colocated"
+        else:
+            failure_reason = "expected_source_not_retrieved"
         rows.append(
             {
                 "id": case.get("id", ""),
@@ -781,7 +823,13 @@ def evaluate_retrieval(
                 "expected_terms": expected_terms,
                 "rank": rank,
                 "passed": rank is not None,
-                "top_source_path": result["hits"][0].get("source_path") if result["hits"] else None,
+                "failure_reason": failure_reason,
+                "source_match_rank": source_match_rank,
+                "terms_match_rank": terms_match_rank,
+                "top_source_path": (
+                    report_source_path(result["hits"][0].get("source_path")) if result["hits"] else None
+                ),
+                "candidates": candidate_diagnostics,
                 "latency_ms": result["latency_ms"],
             }
         )

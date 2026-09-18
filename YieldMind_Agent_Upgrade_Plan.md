@@ -396,6 +396,23 @@
   - 单次直接/Tool检索观测为`453.5ms/566.6ms`，仅记录本次功能验收，不作为吞吐、并发、反向代理或生产网络性能结论。
   - 验收后8072、8091、5432、6379端口均已释放，PostgreSQL/Redis容器为`exited (0)`。
 
+### 阶段 21：检索Bad Case可解释性与BM25Plus候选修正
+
+- 状态：实现与真实Qwen复验已完成；第二人标签复核尚未完成，因此未引入reranker、未切换默认embedding。
+- 问题核查：
+  - 原评测只保存命中名次和第一来源，无法区分未召回、正确文档错误chunk排前、目标词跨chunk等原因，不能据此合理决定增加reranker。
+  - 候选诊断发现`BM25Plus`的delta使零query-token重叠chunk也获得正分；原`score > 0`过滤会让这些无关候选进入RRF。这是检索逻辑问题，不是模型能力问题。
+- 实现：
+  - `evaluate_retrieval`新增每个case的候选chunk、仓库相对来源、来源/词项匹配、`source_match_rank`、`terms_match_rank`和结构化`failure_reason`；不保存候选全文和本机绝对路径。
+  - BM25Plus候选增加规范化query token至少一项重叠约束；保留BM25Plus算法、原tokenizer和原指标口径。
+  - 新增回归测试，验证零重叠query不再由delta产生伪候选，并覆盖两类失败原因。
+- 真实验证：
+  - 修复后30条Qwen真实评测：vector=`0.9667/0.7789/0.6667/538.2ms`，BM25+=`0.8000/0.8000/0.8000/3.0ms`，hybrid=`1.0000/0.8861/0.8000/444.5ms`，依次为Recall@5/MRR/Top-1/单次平均延迟。
+  - 对比修复前，hybrid Recall@5不变，MRR增加`0.0222`、Top-1增加`0.0333`；只有`safety_redaction`从第3升至第1，未选择性删除其他Bad Case。
+  - 剩余6个hybrid Top-1 mismatch的正确chunk都在前4；其中2个是正确文档的其他chunk先返回，另外4个为其他来源先返回。全部仍需第二人复核可接受来源。
+  - 完整本地报告：`agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_114855.json`；Git精简结果：`evals/results/yieldmind_qwen3_retrieval_diagnostics_20260918.json`。
+  - 决策：当前不增加reranker。先扩大真实用户查询并完成独立标签复核，再在固定case上比较收益和延迟，避免对单人自建标签过拟合。
+
 ## 本轮验证结果
 
 验证环境：`/opt/anaconda3/envs/amla/bin/python`
@@ -404,10 +421,11 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 通过，`57 passed, 70 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束、HTTP embedding/API回环与代理隔离、StateGraph证据接入/无证据失败、服务端运行时选择及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 通过，`58 passed, 70 warnings`；新增检索profile隔离/BM25+候选约束与Bad Case解释、索引重建、30条数据集约束、HTTP embedding/API回环与代理隔离、StateGraph证据接入/无证据失败、服务端运行时选择及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |
+| 修正BM25Plus零重叠候选后重跑同一Qwen命令 | 通过；hybrid Recall@5=`1.0000`、MRR=`0.8861`、Top-1=`0.8000`，真实67次encode/80条文本，`real_llm_calls=0` |
 | `python scripts/run_yieldmind_qwen_api_smoke.py --embedding-endpoint http://127.0.0.1:8091` | 通过，FastAPI readiness、Qwen入库、直接搜索和Tool搜索9项检查全true；真实9次encode/22条文本，`real_llm_calls=0` |
 | `python scripts/check_yieldmind_qwen_api_http.py --api-base-url http://127.0.0.1:8072 --embedding-endpoint http://127.0.0.1:8091` | 通过，独立Uvicorn/TCP正常场景13/13及Qwen不可达场景7/7检查通过；正向真实9次encode/22条文本，反向readiness=503，`real_llm_calls=0` |
 | `python scripts/check_yieldmind_embedding_capability.py` | 通过；离线确认Qwen3/BGE-M3均未达到本机零变更运行条件，`network_calls=0`、`model_downloads=0`、`model_inference_calls=0` |

@@ -912,6 +912,10 @@ def test_knowledge_bm25_hybrid_and_profile_isolation(tmp_path: Path) -> None:
         KnowledgeSearchRequest(query="Docker network memory sandbox", retrieval_mode="hybrid", top_k=2)
     )
     assert bm25["hits"][0]["source_path"].endswith("mechanism.md")
+    assert len(bm25["hits"]) == 1
+    assert not kb.search(
+        KnowledgeSearchRequest(query="quasar nebula unrelated", retrieval_mode="bm25", top_k=2)
+    )["hits"]
     assert hybrid["hits"][0]["source_path"].endswith("safety.md")
     assert set(hybrid["hits"][0]["retrieval_channels"]) == {"vector", "bm25"}
 
@@ -1044,6 +1048,63 @@ def test_retrieval_eval_dataset_has_distinct_labeled_cases() -> None:
     assert len({case["id"] for case in cases}) == len(cases)
     assert len({source for case in cases for source in case["expected_source_paths"]}) >= 6
     assert any(any("\u4e00" <= char <= "\u9fff" for char in case["query"]) for case in cases)
+
+
+def test_retrieval_evaluation_explains_source_and_term_failures() -> None:
+    from yieldmind.knowledge_base import evaluate_retrieval
+
+    class FakeKnowledgeBase:
+        embedding_profile = EmbeddingProfile(index_version="diagnostic-v1")
+
+        def search(self, request: KnowledgeSearchRequest) -> dict[str, object]:
+            hits_by_query = {
+                "split terms": [
+                    {
+                        "chunk_id": "chunk-a",
+                        "source_path": "/private/corpus/expected.md",
+                        "chunk_index": 0,
+                        "text": "authorization is redacted",
+                        "score": 0.9,
+                    }
+                ],
+                "wrong source": [
+                    {
+                        "chunk_id": "chunk-b",
+                        "source_path": "/private/corpus/other.md",
+                        "chunk_index": 1,
+                        "text": "authorization is not encryption",
+                        "score": 0.8,
+                    }
+                ],
+            }
+            return {"hits": hits_by_query[request.query], "latency_ms": 1.0}
+
+    cases = [
+        {
+            "id": "split",
+            "query": "split terms",
+            "expected_source_paths": ["expected.md"],
+            "expected_terms": ["authorization", "encryption"],
+        },
+        {
+            "id": "source",
+            "query": "wrong source",
+            "expected_source_paths": ["expected.md"],
+            "expected_terms": ["authorization", "encryption"],
+        },
+    ]
+
+    report = evaluate_retrieval(FakeKnowledgeBase(), cases, retrieval_mode="vector")
+    split, source = report["cases"]
+    assert split["failure_reason"] == "expected_source_retrieved_but_terms_not_colocated"
+    assert split["source_match_rank"] == 1
+    assert split["terms_match_rank"] is None
+    assert split["candidates"][0]["source_path"] == "expected.md"
+    assert split["candidates"][0]["missing_terms"] == ["encryption"]
+    assert source["failure_reason"] == "expected_source_not_retrieved"
+    assert source["source_match_rank"] is None
+    assert source["terms_match_rank"] == 1
+    assert "/private/" not in json.dumps(report)
 
 
 def test_safety_redaction_and_budget_tools(tmp_path: Path) -> None:

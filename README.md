@@ -127,15 +127,23 @@ following results (Recall@5 / MRR / citation accuracy@1 / mean query latency):
 
 | Retrieval | Metrics |
 | --- | --- |
-| Qwen3 vector | `0.9667 / 0.7789 / 0.6667 / 378.6 ms` |
-| BM25+ | `0.8000 / 0.8000 / 0.8000 / 2.4 ms` |
-| Qwen3 + BM25+ RRF | `1.0000 / 0.8639 / 0.7667 / 431.3 ms` |
+| Qwen3 vector | `0.9667 / 0.7789 / 0.6667 / 538.2 ms` |
+| BM25+ | `0.8000 / 0.8000 / 0.8000 / 3.0 ms` |
+| Qwen3 + BM25+ RRF | `1.0000 / 0.8861 / 0.8000 / 444.5 ms` |
 
 The model service peaked at about `3.90 GB` RSS; indexing 20 chunks took
-`15.60s`, excluding model loading. These are results on a small, single-author,
+`16.08s`, excluding model loading. These are results on a small, single-author,
 repository-specific set, not production-quality evidence. Hashing remains the
 deterministic offline default; Qwen3 hybrid retrieval is the measured quality
 candidate while the benchmark is expanded and independently reviewed.
+
+The table uses the corrected BM25Plus candidate policy: a chunk must share at
+least one normalized token with the query before its delta-adjusted score can
+enter lexical results or RRF. The correction kept hybrid Recall@5 at `1.0000`
+and changed one case from rank 3 to rank 1; the detailed before/after evidence
+is in `evals/results/yieldmind_qwen3_retrieval_diagnostics_20260918.json`.
+Candidate-level diagnostics retain source/chunk identity and term-match flags
+without copying source text or absolute paths into the report.
 
 To exercise Qwen retrieval inside the actual deterministic StateGraph, start
 the loopback embedding service and PostgreSQL/Redis, then run:
