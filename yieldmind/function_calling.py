@@ -10,6 +10,7 @@ This module supports two explicitly separated modes:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from typing import Any
@@ -39,6 +40,8 @@ class ToolPlanRequest(BaseModel):
     allow_live_llm: bool = False
     llm: str = "ark"
     max_tool_calls: int = Field(default=4, ge=1, le=12)
+    max_steps: int = Field(default=4, ge=1, le=8)
+    max_repeated_tool_calls: int = Field(default=1, ge=0, le=3)
 
 
 class ToolPlanResult(BaseModel):
@@ -47,10 +50,12 @@ class ToolPlanResult(BaseModel):
     llm_calls: int = 0
     simulated_model_calls: int = 0
     note: str = ""
+    usage: dict[str, int] = Field(default_factory=dict)
     assistant_message: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
 
 class ToolExecutionResult(BaseModel):
+    run_id: str = ""
     plan: ToolPlanResult
     results: list[dict[str, Any]]
     passed: bool
@@ -58,6 +63,12 @@ class ToolExecutionResult(BaseModel):
     final_answer: str = ""
     llm_calls: int = 0
     simulated_model_calls: int = 0
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    stop_reason: str = ""
+    requested_tool_calls: int = 0
+    executed_tool_calls: int = 0
+    repeated_tool_calls: int = 0
+    token_usage: dict[str, int] = Field(default_factory=dict)
 
 
 class ToolCallProtocolError(ValueError):
@@ -217,6 +228,51 @@ def _assistant_message_payload(message: Any) -> dict[str, Any]:
     }
 
 
+def _initial_live_messages(request: ToolPlanRequest) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Use YieldMind tools when they are needed to satisfy the user request. "
+                "Do not invent tool names or repeat an identical tool call. Base the final answer on tool results, "
+                "distinguish measured values from assumptions, and cite chunk_id and source_path for knowledge hits. "
+                "Do not claim success for a failed tool or invent missing evidence."
+            ),
+        },
+        {"role": "user", "content": request.prompt},
+    ]
+
+
+def _tool_call_fingerprint(call: ToolCallItem) -> str:
+    canonical = json.dumps(
+        {"tool_name": call.tool_name, "args": call.args},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _response_usage(response: Any) -> dict[str, int]:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {}
+    if hasattr(usage, "model_dump"):
+        raw = usage.model_dump()
+    elif isinstance(usage, dict):
+        raw = usage
+    else:
+        raw = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+            "completion_tokens": getattr(usage, "completion_tokens", 0),
+            "total_tokens": getattr(usage, "total_tokens", 0),
+        }
+    return {
+        key: max(0, int(raw.get(key) or 0))
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+    }
+
+
 def _parse_live_tool_calls(message: Any, registry: ToolRegistry, *, max_tool_calls: int) -> list[ToolCallItem]:
     raw_calls = list(getattr(message, "tool_calls", None) or [])
     if len(raw_calls) > max_tool_calls:
@@ -251,7 +307,15 @@ def _parse_live_tool_calls(message: Any, registry: ToolRegistry, *, max_tool_cal
     return calls
 
 
-def _live_llm_plan(request: ToolPlanRequest, registry: ToolRegistry, *, client: Any | None = None) -> ToolPlanResult:
+def _live_llm_step(
+    request: ToolPlanRequest,
+    registry: ToolRegistry,
+    *,
+    messages: list[dict[str, Any]],
+    max_tool_calls: int,
+    tool_choice: str,
+    client: Any | None = None,
+) -> ToolPlanResult:
     if not request.allow_live_llm:
         raise PermissionError("Live function calling requires allow_live_llm=true.")
 
@@ -259,26 +323,16 @@ def _live_llm_plan(request: ToolPlanRequest, registry: ToolRegistry, *, client: 
     from utils import get_client
 
     tools = _tool_definitions(registry)
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Select YieldMind tools needed to satisfy the user request. "
-                "Do not invent tool names. Prefer deterministic offline tools unless the user explicitly asks for live LLM execution."
-            ),
-        },
-        {"role": "user", "content": request.prompt},
-    ]
     active_client = client or get_client(request.llm)
     response = active_client.chat.completions.create(
         model=AVAILABLE_LLMs[request.llm]["model"],
         messages=messages,
         tools=tools,
-        tool_choice="auto",
+        tool_choice=tool_choice,
         temperature=0,
     )
     message = response.choices[0].message
-    calls = _parse_live_tool_calls(message, registry, max_tool_calls=request.max_tool_calls)
+    calls = _parse_live_tool_calls(message, registry, max_tool_calls=max_tool_calls)
     assistant_message = _assistant_message_payload(message)
     for payload, call in zip(assistant_message.get("tool_calls", []), calls):
         payload["id"] = call.tool_call_id
@@ -288,8 +342,28 @@ def _live_llm_plan(request: ToolPlanRequest, registry: ToolRegistry, *, client: 
         llm_calls=1,
         simulated_model_calls=0,
         note="Real model call; tool names and Pydantic arguments were validated before execution.",
+        usage=_response_usage(response),
         assistant_message=assistant_message,
     )
+
+
+def _live_llm_plan(request: ToolPlanRequest, registry: ToolRegistry, *, client: Any | None = None) -> ToolPlanResult:
+    return _live_llm_step(
+        request,
+        registry,
+        messages=_initial_live_messages(request),
+        max_tool_calls=request.max_tool_calls,
+        tool_choice="auto",
+        client=client,
+    )
+
+
+def _as_simulated_step(result: ToolPlanResult) -> ToolPlanResult:
+    result.mode = SIMULATED_TEST_ADAPTER
+    result.llm_calls = 0
+    result.simulated_model_calls = 1
+    result.note = "Injected simulated test adapter; no real model API call."
+    return result
 
 
 def plan_tools(
@@ -305,62 +379,9 @@ def plan_tools(
             raise ValueError("simulated_test_adapter requires an injected client.")
         result = _live_llm_plan(request, registry, client=client)
         if simulated_test_adapter:
-            result.mode = SIMULATED_TEST_ADAPTER
-            result.llm_calls = 0
-            result.simulated_model_calls = 1
-            result.note = "Injected simulated test adapter; no real model API call."
+            _as_simulated_step(result)
         return result
     return local_rule_plan(request)
-
-
-def _live_llm_finalize(
-    request: ToolPlanRequest,
-    plan: ToolPlanResult,
-    results: list[dict[str, Any]],
-    registry: ToolRegistry,
-    *,
-    client: Any | None = None,
-) -> str:
-    from configs import AVAILABLE_LLMs
-    from utils import get_client
-
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "system",
-            "content": (
-                "Answer from the supplied tool results. Distinguish measured values from assumptions. "
-                "When knowledge hits are used, cite their chunk_id and source_path. "
-                "Do not claim success for a failed tool or invent missing evidence."
-            ),
-        },
-        {"role": "user", "content": request.prompt},
-        plan.assistant_message,
-    ]
-    for call, result in zip(plan.tool_calls, results):
-        safe_result = redact_payload(RedactRequest(payload=result)).payload
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": call.tool_call_id,
-                "name": call.tool_name,
-                "content": json.dumps(safe_result, ensure_ascii=False),
-            }
-        )
-    active_client = client or get_client(request.llm)
-    response = active_client.chat.completions.create(
-        model=AVAILABLE_LLMs[request.llm]["model"],
-        messages=messages,
-        tools=_tool_definitions(registry),
-        tool_choice="none",
-        temperature=0,
-    )
-    message = response.choices[0].message
-    if getattr(message, "tool_calls", None):
-        raise ToolCallProtocolError("Final response requested additional tools despite tool_choice='none'.")
-    content = str(getattr(message, "content", "") or "").strip()
-    if not content:
-        raise ToolCallProtocolError("Final response was empty after tool execution.")
-    return content
 
 
 def execute_plan(
@@ -388,65 +409,240 @@ def execute_plan(
             "prompt": request.prompt,
             "allow_live_llm": request.allow_live_llm,
             "simulated_test_adapter": simulated_test_adapter,
+            "max_steps": request.max_steps,
+            "max_tool_calls": request.max_tool_calls,
+            "max_repeated_tool_calls": request.max_repeated_tool_calls,
         },
     )
-    plan = plan_tools(
-        request,
-        registry=registry,
-        client=client,
-        simulated_test_adapter=simulated_test_adapter,
-    )
+    if not request.allow_live_llm:
+        plan = plan_tools(request, registry=registry, client=client, simulated_test_adapter=simulated_test_adapter)
+        results: list[dict[str, Any]] = []
+        for call in plan.tool_calls:
+            started = time.time()
+            result = registry.execute(call.tool_name, call.args, run_id=active_run_id)
+            payload = result.model_dump()
+            payload.update(
+                {
+                    "tool_name": call.tool_name,
+                    "reason": call.reason,
+                    "duration_seconds": round(time.time() - started, 4),
+                }
+            )
+            results.append(payload)
+            store.add_event(
+                active_run_id,
+                stage="function_calling_tool",
+                level="info" if result.ok else "error",
+                message=f"{call.tool_name} {'passed' if result.ok else 'failed'} via {plan.mode}.",
+                payload=redact_payload(RedactRequest(payload=payload)).payload,
+            )
+        passed = all(item.get("ok") for item in results) if results else True
+        execution = ToolExecutionResult(
+            run_id=active_run_id,
+            plan=plan,
+            results=results,
+            passed=passed,
+            mode=plan.mode,
+            llm_calls=0,
+            simulated_model_calls=0,
+            steps=[
+                {
+                    "step_index": 1,
+                    "outcome": "offline_tools_executed" if plan.tool_calls else "offline_no_tools",
+                    "tool_names": [call.tool_name for call in plan.tool_calls],
+                }
+            ],
+            stop_reason="offline_plan_complete",
+            requested_tool_calls=len(plan.tool_calls),
+            executed_tool_calls=len(plan.tool_calls),
+        )
+        store.update_run(
+            active_run_id,
+            status="passed" if passed else "failed",
+            result=execution.model_dump(),
+            completed=True,
+        )
+        return execution
+
+    messages = _initial_live_messages(request)
+    steps: list[dict[str, Any]] = []
     results = []
-    for call in plan.tool_calls:
-        started = time.time()
-        result = registry.execute(call.tool_name, call.args, run_id=active_run_id)
-        payload = result.model_dump()
-        payload["tool_name"] = call.tool_name
-        payload["reason"] = call.reason
-        payload["duration_seconds"] = round(time.time() - started, 4)
-        results.append(payload)
+    result_by_fingerprint: dict[str, dict[str, Any]] = {}
+    requested_tool_calls = 0
+    executed_tool_calls = 0
+    repeated_tool_calls = 0
+    token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "reported_steps": 0}
+    llm_calls = 0
+    simulated_model_calls = 0
+    final_answer = ""
+    stop_reason = ""
+    initial_plan: ToolPlanResult | None = None
+
+    for step_index in range(1, request.max_steps + 1):
+        remaining_tool_calls = request.max_tool_calls - requested_tool_calls
+        tool_choice = "auto" if remaining_tool_calls > 0 else "none"
+        if step_index == 1:
+            step_plan = plan_tools(
+                request,
+                registry=registry,
+                client=client,
+                simulated_test_adapter=simulated_test_adapter,
+            )
+            initial_plan = step_plan
+        else:
+            step_plan = _live_llm_step(
+                request,
+                registry,
+                messages=messages,
+                max_tool_calls=max(0, remaining_tool_calls),
+                tool_choice=tool_choice,
+                client=client,
+            )
+            if simulated_test_adapter:
+                _as_simulated_step(step_plan)
+        llm_calls += step_plan.llm_calls
+        simulated_model_calls += step_plan.simulated_model_calls
+        if step_plan.usage:
+            token_usage["reported_steps"] += 1
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                token_usage[key] += int(step_plan.usage.get(key, 0))
+        messages.append(step_plan.assistant_message)
+
+        assistant_content = str(step_plan.assistant_message.get("content") or "").strip()
+        if not step_plan.tool_calls:
+            if not assistant_content:
+                raise ToolCallProtocolError("Live model returned neither tool calls nor a final answer.")
+            final_answer = assistant_content
+            stop_reason = "final_answer"
+            step_trace = {
+                "step_index": step_index,
+                "outcome": "final_answer",
+                "tool_choice": tool_choice,
+                "tool_calls": [],
+                "assistant_content": assistant_content,
+                "usage": step_plan.usage,
+            }
+            steps.append(step_trace)
+            store.add_event(
+                active_run_id,
+                stage="agent_loop_step",
+                message=f"Agent loop step {step_index} produced the final answer.",
+                payload=redact_payload(RedactRequest(payload=step_trace)).payload,
+            )
+            break
+
+        requested_tool_calls += len(step_plan.tool_calls)
+        call_traces: list[dict[str, Any]] = []
+        duplicate_limit_exceeded = False
+        for call in step_plan.tool_calls:
+            fingerprint = _tool_call_fingerprint(call)
+            duplicate = fingerprint in result_by_fingerprint
+            if duplicate:
+                repeated_tool_calls += 1
+                payload = dict(result_by_fingerprint[fingerprint])
+                payload["duplicate_reused"] = True
+                payload["reason"] = "Identical tool call detected; reused the prior result without executing again."
+                duplicate_limit_exceeded = repeated_tool_calls > request.max_repeated_tool_calls
+            else:
+                started = time.time()
+                result = registry.execute(
+                    call.tool_name,
+                    call.args,
+                    run_id=active_run_id,
+                    idempotency_key=f"agent-loop:{active_run_id}:{fingerprint}",
+                )
+                executed_tool_calls += 1
+                payload = result.model_dump()
+                payload.update(
+                    {
+                        "tool_name": call.tool_name,
+                        "reason": call.reason,
+                        "duration_seconds": round(time.time() - started, 4),
+                        "duplicate_reused": False,
+                    }
+                )
+                result_by_fingerprint[fingerprint] = dict(payload)
+                store.add_event(
+                    active_run_id,
+                    stage="function_calling_tool",
+                    level="info" if result.ok else "error",
+                    message=f"{call.tool_name} {'passed' if result.ok else 'failed'} at agent step {step_index}.",
+                    payload=redact_payload(
+                        RedactRequest(payload={**payload, "step_index": step_index, "fingerprint": fingerprint})
+                    ).payload,
+                )
+            results.append(payload)
+            call_traces.append(
+                {
+                    "tool_call_id": call.tool_call_id,
+                    "tool_name": call.tool_name,
+                    "fingerprint": fingerprint,
+                    "duplicate_reused": duplicate,
+                    "ok": bool(payload.get("ok")),
+                }
+            )
+            safe_result = redact_payload(RedactRequest(payload=payload)).payload
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.tool_call_id,
+                    "name": call.tool_name,
+                    "content": json.dumps(safe_result, ensure_ascii=False),
+                }
+            )
+
+        step_trace = {
+            "step_index": step_index,
+            "outcome": "duplicate_limit_exceeded" if duplicate_limit_exceeded else "tools_returned",
+            "tool_choice": tool_choice,
+            "tool_calls": call_traces,
+            "requested_tool_calls_total": requested_tool_calls,
+            "executed_tool_calls_total": executed_tool_calls,
+            "repeated_tool_calls_total": repeated_tool_calls,
+            "usage": step_plan.usage,
+        }
+        steps.append(step_trace)
         store.add_event(
             active_run_id,
-            stage="function_calling",
-            level="info" if result.ok else "error",
-            message=f"{call.tool_name} {'passed' if result.ok else 'failed'} via {plan.mode}.",
-            payload=redact_payload(RedactRequest(payload=payload)).payload,
+            stage="agent_loop_step",
+            level="error" if duplicate_limit_exceeded else "info",
+            message=(
+                f"Agent loop stopped at step {step_index}: repeated tool-call limit exceeded."
+                if duplicate_limit_exceeded
+                else f"Agent loop step {step_index} returned {len(step_plan.tool_calls)} tool result(s)."
+            ),
+            payload=step_trace,
         )
-    llm_calls = plan.llm_calls
-    simulated_model_calls = plan.simulated_model_calls
-    final_answer = ""
-    if request.allow_live_llm:
-        if plan.tool_calls:
-            final_answer = _live_llm_finalize(request, plan, results, registry, client=client)
-            if simulated_test_adapter:
-                simulated_model_calls += 1
-            else:
-                llm_calls += 1
-        else:
-            final_answer = str(plan.assistant_message.get("content") or "").strip()
-            if not final_answer:
-                raise ToolCallProtocolError("Live model returned neither tool calls nor a final answer.")
-    passed = (all(item.get("ok") for item in results) if results else True) and (
-        bool(final_answer) if request.allow_live_llm else True
-    )
-    store.update_run(
-        active_run_id,
-        status="passed" if passed else "failed",
-        result={
-            "plan": plan.model_dump(),
-            "results": results,
-            "final_answer": final_answer,
-            "llm_calls": llm_calls,
-            "simulated_model_calls": simulated_model_calls,
-        },
-        completed=True,
-    )
-    return ToolExecutionResult(
-        plan=plan,
+        if duplicate_limit_exceeded:
+            stop_reason = "repeated_tool_call_limit"
+            break
+    else:
+        stop_reason = "max_steps_exhausted"
+
+    if initial_plan is None:
+        raise RuntimeError("Agent loop did not execute an initial planning step.")
+    passed = bool(final_answer) and all(item.get("ok") for item in results)
+    execution = ToolExecutionResult(
+        run_id=active_run_id,
+        plan=initial_plan,
         results=results,
         passed=passed,
-        mode=plan.mode,
+        mode=initial_plan.mode,
         final_answer=final_answer,
         llm_calls=llm_calls,
         simulated_model_calls=simulated_model_calls,
+        steps=steps,
+        stop_reason=stop_reason,
+        requested_tool_calls=requested_tool_calls,
+        executed_tool_calls=executed_tool_calls,
+        repeated_tool_calls=repeated_tool_calls,
+        token_usage=token_usage,
     )
+    persisted_execution = redact_payload(RedactRequest(payload=execution.model_dump())).payload
+    store.update_run(
+        active_run_id,
+        status="passed" if passed else "failed",
+        result=persisted_execution,
+        completed=True,
+    )
+    return execution

@@ -430,6 +430,39 @@
   - 报告明确记录`recursive_chars_700_80_v1`、7篇文档/20个chunk、67次encode/80条文本；hybrid质量仍为`1.0000/0.8861/0.8000`。
   - CSV结构检查为30个case、150行，问题和候选文本均有中英对照，150个空relevance和confidence；不存在source/rank/score列。当前只能称“双语标注包已准备”，中文机器辅助翻译不等于第二人标注，不能称“人工评测已完成”。
 
+### 阶段 23：有界多步 Agent Loop、重复调用检测与逐步 Trace
+
+- 状态：代码与模拟协议回归已完成；真实LLM多步调用尚未执行。
+- 执行前核查：
+  - 旧Function Calling路径固定为“一次选工具、执行、一次禁用工具的回答”，不能根据工具结果继续选择下一个工具。
+  - 旧`max_tool_calls`只约束首次模型返回数量；Tool Registry虽支持幂等key，Function Calling路径未传入，因此不能宣称已防止重复副作用。
+- 实现：
+  - `ToolPlanRequest`新增`max_steps`和`max_repeated_tool_calls`；`max_tool_calls`改为整个loop的总工具请求上限，额度用完后下一步强制`tool_choice=none`以仅生成回答。
+  - 工具名与规范化JSON参数生成SHA-256指纹；首次执行使用`run_id + fingerprint`作为持久幂等key，相同调用复用已有结果而不再执行。
+  - 允许有上限的一次重复结果回传，让模型有机会修正；持续重复则以`repeated_tool_call_limit`终止，步数用尽以`max_steps_exhausted`终止。
+  - API执行结果返回`run_id`、每步outcome、调用指纹、请求/真实执行/重复次数和终止原因；同步持久化`agent_loop_step`与`function_calling_tool`事件。
+  - 供应商返回usage时累计prompt/completion/total token；缺失usage时保留未报告状态，不伪造实测token。
+- 验证：
+  - 注入模拟客户端验证两轮不同工具后第三轮回答、逐步消息回传、usage累计和3条持久Trace。
+  - 验证相同调用请求3次但只真正执行1次，第2次复用、第3次以重复上限终止。
+  - 验证工具总额度用尽后只能回答，以及连续工具调用在步数上限时明确失败。所有模型次数均记为`simulated_model_calls`，不作为真实LLM成果。
+
+### 阶段 24：短期/长期 Memory 完整化
+
+- 状态：方案已确定，尚未实施数据迁移与调用链改造。
+- 短期记忆（session scope）：
+  - 保存当前数据集/版本、目标列、评价协议、预算、选定run、取消条件、最近对话和有界滚动摘要。
+  - 每次约束更新增加`constraint_version`，并通过乐观并发检查防止两个请求相互覆盖；摘要保留覆盖的turn ID范围。
+  - 上下文组装顺序为：固定安全指令、当前显式约束、当前run摘要、已验证证据、适用的长期记忆、滚动摘要、最近消息；每部分记录token和裁剪原因。
+- 长期记忆（workspace scope）：
+  - 只保存用户明确确认的偏好，或验收通过run中的结构化经验；模型推测、未验证文献和失败方案不能直接写成成功事实。
+  - 记忆保留`kind`、来源turn/run、验收状态、适用的数据特征/评估协议、版本、时间和失效状态；失败经验只能以`failure`kind用于避错。
+  - 当前应用没有用户身份/权限系统，因此不宣称跨用户个性化；第一版长期记忆限于服务端受控workspace。
+- 调用与预算：
+  - Function Calling和Tool Registry完整写入`session_id/turn_id`；模型、工具、证据与摘要步骤可回溯到同一turn。
+  - 单次上下文裁剪与turn/run累计模型预算分开；优先保留显式约束，再减少历史和证据，累计额度不足时停止下一次模型请求。
+- 预计验收：约束继承与纠正、会话隔离、并发版本冲突、摘要溯源、长期记忆准入/失效、失败经验不被当成成功、删除后不再进入上下文，以及累计预算停止。
+
 ## 本轮验证结果
 
 验证环境：`/opt/anaconda3/envs/amla/bin/python`
@@ -438,7 +471,7 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 通过，`60 passed, 74 warnings`；新增检索profile隔离/BM25+候选约束、Bad Case解释、动态分块版本、稳定RRF平分和盲审导出测试，以及索引重建、HTTP回环、StateGraph证据和Function Calling协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 通过，`64 passed, 74 warnings`；新增检索profile隔离/BM25+候选约束、Bad Case解释、动态分块版本、稳定RRF平分、盲审导出和有界Agent Loop测试，以及索引重建、HTTP回环、StateGraph证据和Function Calling协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |
