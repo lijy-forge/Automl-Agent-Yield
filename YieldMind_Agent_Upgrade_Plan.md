@@ -365,6 +365,22 @@
   - 本阶段`real_llm_calls=0`、`simulated_model_calls=0`：证明真实embedding和工具/图编排接线，不代表真实LLM完成了工具选择。
   - 初次定向测试发现检索工具把Chroma目录误登记为文件产物，导致artifact guardrail拒绝流程；修正Tool契约后定向测试和真实集成均通过。
 
+### 阶段 19：Qwen3服务端配置与FastAPI联调
+
+- 状态：已完成。FastAPI知识接口和Tool Registry可由服务端环境显式切换Qwen3，默认仍为离线hashing。
+- 实现：
+  - 新增`yieldmind/knowledge_runtime.py`，用Pydantic校验profile、回环endpoint、超时、Chroma路径和collection；token只按环境变量名读取，不进入公开配置。
+  - Tool Registry支持延迟`knowledge_base_factory`，FastAPI启动时不连接Qwen；只有readiness或实际知识调用才检查服务，避免可选依赖阻止API进程启动。
+  - `/api/knowledge/ingest`、`/api/knowledge/search`及`search_knowledge` Tool统一使用服务端配置的profile；`/api/knowledge/config`返回非密钥配置。
+  - `/health/dependencies`新增knowledge依赖：Qwen被配置但endpoint缺失、身份不匹配或不可用时返回非就绪；默认hashing不产生网络调用。
+  - `.env.example`增加YieldMind专用embedding配置；新增`scripts/run_yieldmind_qwen_api_smoke.py`。
+- 真实验证：
+  - 完整本地报告：`agent_workspace/yieldmind/qwen_api_smoke/20260918_111812/qwen_api_smoke.json`；Git精简结果：`evals/results/yieldmind_qwen3_api_20260918.json`。
+  - PostgreSQL、Redis、Qwen readiness及入库/搜索共9项检查全部为true；直接知识接口和Tool Registry搜索均使用profile指纹`445d787820ef`。
+  - 7篇文档、20个chunk；本轮真实增加9次embedding encode、22条文本，两个搜索路径各返回5条结果。
+  - 使用FastAPI TestClient执行真实路由函数和真实外部依赖，不宣称独立HTTP进程吞吐；`real_llm_calls=0`，不宣称真实LLM工具选择。
+  - 安全审阅发现初版公开配置返回Chroma绝对路径；修正为仅返回`chroma_dir_configured`后重新完成9项真实联调。最终单次直接/Tool搜索延迟分别为`735.9ms/922.7ms`，不选择性保留更低的旧轮次数字。
+
 ## 本轮验证结果
 
 验证环境：`/opt/anaconda3/envs/amla/bin/python`
@@ -373,10 +389,11 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 通过，`53 passed, 60 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束、HTTP embedding回环/代理隔离、StateGraph证据接入/无证据失败及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 通过，`56 passed, 70 warnings`；新增检索profile隔离/BM25+、索引重建、30条数据集约束、HTTP embedding回环/代理隔离、StateGraph证据接入/无证据失败、服务端运行时选择及模拟Function Calling双轮协议测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |
+| `python scripts/run_yieldmind_qwen_api_smoke.py --embedding-endpoint http://127.0.0.1:8091` | 通过，FastAPI readiness、Qwen入库、直接搜索和Tool搜索9项检查全true；真实9次encode/22条文本，`real_llm_calls=0` |
 | `python scripts/check_yieldmind_embedding_capability.py` | 通过；离线确认Qwen3/BGE-M3均未达到本机零变更运行条件，`network_calls=0`、`model_downloads=0`、`model_inference_calls=0` |
 | `python scripts/run_yieldmind_function_calling_smoke.py` | 通过，生成 skipped 报告；`real_llm_calls=0`，未调用真实模型 |
 | `python scripts/run_yieldmind_workflow.py --n-samples 40 --n-splits 2` | 通过，`status=passed`、`workflow_backend=langgraph_stategraph`、`langgraph_available=true` |

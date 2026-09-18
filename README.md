@@ -152,6 +152,20 @@ This path adds an explicit `retrieve_evidence` node. It invokes the registered
 and writes structured evidence references into the final report. Qwen remains
 opt-in: ordinary offline workflows do not require the model service.
 
+FastAPI selects its knowledge runtime only from server environment variables;
+clients cannot supply an embedding endpoint or token. To enable Qwen for
+`/api/knowledge/*` and the registered knowledge tools:
+
+```bash
+export YIELDMIND_EMBEDDING_PROFILE=qwen3-embedding-0.6b
+export YIELDMIND_EMBEDDING_ENDPOINT=http://127.0.0.1:8091
+export YIELDMIND_EMBEDDING_TOKEN=local-only-token
+```
+
+`GET /api/knowledge/config` exposes the non-secret active profile and
+`GET /health/dependencies` treats the configured embedding service as a
+readiness dependency. The default `local_hashing` profile does not contact it.
+
 ## Active Modules
 
 - `run_yield.py`: owns `YieldAgentManager`, the yield-specific manager that

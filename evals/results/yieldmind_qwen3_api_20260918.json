@@ -1,0 +1,57 @@
+{
+  "status": "passed",
+  "evaluated_at": "2026-09-18",
+  "scenario": "FastAPI knowledge endpoints and Tool Registry with server-controlled Qwen3 runtime",
+  "checks": {
+    "readiness_ok": true,
+    "knowledge_dependency_ok": true,
+    "qwen_config_active": true,
+    "ingest_ok": true,
+    "direct_search_ok": true,
+    "direct_search_uses_qwen": true,
+    "tool_search_ok": true,
+    "tool_search_uses_qwen": true,
+    "profile_fingerprint_matches": true
+  },
+  "dependencies": {
+    "database_backend": "postgresql",
+    "redis_health_ok": true,
+    "knowledge_runtime_mode": "isolated_http_sentence_transformer_real_inference"
+  },
+  "embedding": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "dimensions": 1024,
+    "device": "cpu",
+    "profile_fingerprint": "445d787820ef",
+    "real_encode_calls": 9,
+    "real_encoded_texts": 22,
+    "service_peak_rss_bytes": 3902492672
+  },
+  "ingestion": {
+    "documents": 7,
+    "chunks": 20
+  },
+  "direct_search": {
+    "hit_count": 5,
+    "latency_ms": 735.867
+  },
+  "tool_search": {
+    "hit_count": 5,
+    "latency_ms": 922.654
+  },
+  "model_call_accounting": {
+    "real_llm_calls": 0,
+    "simulated_model_calls": 0
+  },
+  "full_local_report": {
+    "path": "agent_workspace/yieldmind/qwen_api_smoke/20260918_111812/qwen_api_smoke.json",
+    "sha256": "65e4382f71710ce97a01a863b0d773fc0e27cac7b7978eb0cfe427b5fd923a92",
+    "tracked_by_git": false
+  },
+  "limitations": [
+    "FastAPI TestClient executed the real route functions and dependencies without a separate HTTP server process.",
+    "The smoke validates real Qwen embeddings and Tool Registry routing, not LLM tool selection.",
+    "Latency values are single-run observations on a small repository-specific corpus."
+  ]
+}
