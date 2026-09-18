@@ -1,0 +1,91 @@
+{
+  "status": "passed",
+  "evaluated_at": "2026-09-18",
+  "scenario": "Qwen3 retrieval bad-case diagnostics after BM25Plus candidate correction",
+  "benchmark_version": "yieldmind-retrieval-cases-v1",
+  "case_count": 30,
+  "correction": {
+    "issue": "BM25Plus delta assigned positive scores to chunks with zero normalized query-token overlap, allowing non-lexical candidates into RRF.",
+    "fix": "Require at least one normalized query-token overlap before a BM25Plus-scored chunk can enter lexical results or RRF.",
+    "quality_delta": {
+      "hybrid_recall_at_5": 0.0,
+      "hybrid_mrr": 0.022222222222222254,
+      "hybrid_citation_accuracy_at_1": 0.033333333333333326
+    },
+    "changed_hybrid_cases": [
+      {
+        "id": "safety_redaction",
+        "rank_before": 3,
+        "rank_after": 1
+      }
+    ]
+  },
+  "corrected_baselines": {
+    "vector": {
+      "recall_at_5": 0.9666666666666667,
+      "mrr": 0.7788888888888889,
+      "citation_accuracy_at_1": 0.6666666666666666,
+      "mean_latency_ms": 538.1994333333333
+    },
+    "bm25": {
+      "recall_at_5": 0.8,
+      "mrr": 0.8,
+      "citation_accuracy_at_1": 0.8,
+      "mean_latency_ms": 3.0026333333333333
+    },
+    "hybrid": {
+      "recall_at_5": 1.0,
+      "mrr": 0.8861111111111112,
+      "citation_accuracy_at_1": 0.8,
+      "mean_latency_ms": 444.5347
+    }
+  },
+  "hybrid_bad_case_summary": {
+    "recall_misses_at_5": 0,
+    "top_1_mismatches": 6,
+    "relevant_rank_max": 4,
+    "same_expected_source_wrong_chunk_first": [
+      "data_leakage_denylist",
+      "agent_multi_role"
+    ],
+    "different_source_first": [
+      "mechanism_claim_boundary",
+      "eval_oof",
+      "evidence_semantic_support",
+      "safety_argv"
+    ],
+    "all_cases_requiring_independent_label_review": [
+      "mechanism_claim_boundary",
+      "data_leakage_denylist",
+      "eval_oof",
+      "evidence_semantic_support",
+      "safety_argv",
+      "agent_multi_role"
+    ]
+  },
+  "decision": {
+    "switch_default_embedding": false,
+    "add_reranker_now": false,
+    "reason": "All hybrid relevant chunks are already in the top four, two mismatches are within the expected document, and the single-author labels do not yet resolve semantically overlapping sources. Independent label review is required before adding reranker latency and dependencies.",
+    "next_gate": "Expand with real user queries and have a second reviewer adjudicate acceptable sources before a fixed reranker comparison."
+  },
+  "execution": {
+    "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
+    "embedding_revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "real_embedding_encode_calls": 67,
+    "real_embedding_encoded_texts": 80,
+    "real_llm_calls": 0,
+    "simulated_model_calls": 0
+  },
+  "full_local_report": {
+    "path": "agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_114855.json",
+    "sha256": "5e1c2ac6a1631b446017f1b2e19e78fe91fb54dcedf9ea0b0057aeb4e092d1eb",
+    "tracked_by_git": false
+  },
+  "supersedes_for_hybrid_ranking": "evals/results/yieldmind_qwen3_retrieval_20260918.json",
+  "limitations": [
+    "Labels are single-author repository-specific judgments, not an external literature benchmark.",
+    "Candidate diagnostics identify ranking mechanics but do not determine semantic relevance without independent review.",
+    "Latency values are single-run CPU observations and not throughput or concurrency measurements."
+  ]
+}
