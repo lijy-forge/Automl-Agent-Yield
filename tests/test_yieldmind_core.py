@@ -977,6 +977,16 @@ def test_http_embedding_client_bypasses_system_proxy(monkeypatch: pytest.MonkeyP
     assert client.dimensions == 1024
 
 
+def test_qwen_api_http_smoke_requires_loopback_origin() -> None:
+    from scripts.check_yieldmind_qwen_api_http import validate_loopback_http_url
+
+    assert validate_loopback_http_url("http://127.0.0.1:8072/", label="API") == "http://127.0.0.1:8072"
+    with pytest.raises(ValueError, match="loopback"):
+        validate_loopback_http_url("https://api.example.com", label="API")
+    with pytest.raises(ValueError, match="origin URL"):
+        validate_loopback_http_url("http://localhost:8072/api", label="API")
+
+
 def test_knowledge_runtime_defaults_to_hashing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("YIELDMIND_EMBEDDING_PROFILE", raising=False)
     monkeypatch.delenv("YIELDMIND_EMBEDDING_ENDPOINT", raising=False)
