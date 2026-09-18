@@ -1,0 +1,1707 @@
+﻿reviewer_id,row_id,case_id,query,candidate_code,candidate_text,relevance,confidence,notes
+reviewer_1,data_leakage_denylist:A,data_leakage_denylist,target leakage denylist phi_max m1_true m1_lf,A,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,data_leakage_denylist:B,data_leakage_denylist,target leakage denylist phi_max m1_true m1_lf,B,"## Target leakage denylist
+
+Target and auxiliary true-physics columns must never become model inputs. The
+project denylist includes `Tau0_Pa`, `tau_Pa`, `yield_stress`, `phi_max`,
+`m1_true`, and `m1_lf`. Hidden-variable predictions must be generated from
+allowed features, not copied from true hidden-state columns.
+
+## Split-aware preprocessing
+
+Imputation, scaling, encoding, and learned feature transforms must be fit only
+on each training fold or training split. Fitting preprocessing on all rows
+before cross-validation leaks validation distribution information and makes
+the reported metric optimistic.",,,
+reviewer_1,data_leakage_denylist:C,data_leakage_denylist,target leakage denylist phi_max m1_true m1_lf,C,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,data_leakage_denylist:D,data_leakage_denylist,target leakage denylist phi_max m1_true m1_lf,D,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,data_leakage_denylist:E,data_leakage_denylist,target leakage denylist phi_max m1_true m1_lf,E,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,safety_redaction:A,safety_redaction,redact authorization api keys passwords database URLs email phone,A,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,safety_redaction:B,safety_redaction,redact authorization api keys passwords database URLs email phone,B,"# Execution Isolation And Safety
+
+Scope: execution guarantees implemented by the current sandbox, process
+control, redaction, and task-state code.
+
+## Command construction
+
+Execution tools accept an argument vector instead of a shell command string.
+Avoiding `shell=True` prevents shell metacharacters from changing command
+meaning. Working directories and environment variables are passed explicitly.
+
+## Container isolation
+
+The Docker sandbox runs with networking disabled and applies CPU, memory, and
+process-count limits. The image contains fixed numerical dependencies and does
+not bake host API keys into an image layer. Docker execution still requires an
+explicit authorization flag.",,,
+reviewer_1,safety_redaction:C,safety_redaction,redact authorization api keys passwords database URLs email phone,C,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,safety_redaction:D,safety_redaction,redact authorization api keys passwords database URLs email phone,D,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,safety_redaction:E,safety_redaction,redact authorization api keys passwords database URLs email phone,E,"## Cancellation
+
+Long-running OperationAgent subprocesses start in a separate process group.
+Cancellation or timeout sends termination to the group and escalates to a kill
+signal after a grace period. This covers descendants created by that operation;
+ordinary synchronous Python tools still stop only at their supported boundary.
+
+## Secret handling
+
+Tool arguments, results, and event payloads pass through redaction before
+sensitive values are persisted. Authorization headers, API keys, passwords,
+database URLs, email addresses, and phone-like values are covered by the
+current redaction checks. Redaction reduces exposure but is not encryption.",,,
+reviewer_1,agent_retry_budget:A,agent_retry_budget,bounded local repair replan tool calling termination budget,A,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,agent_retry_budget:B,agent_retry_budget,bounded local repair replan tool calling termination budget,B,"## Mechanism ablation
+
+When a generated model claims a physics mechanism helps, compare
+`with_mechanism` and `without_mechanism` under the same folds, preprocessing,
+features, and budget. Record delta RMSE and delta R2. A marginal change should
+not be presented as strong physical validation.
+
+## Evaluation set boundary
+
+The offline Agent regression set measures workflow behavior such as tool
+routing and artifact checks. It does not measure a real LLM when the report
+records zero real model calls, and it does not establish production accuracy.",,,
+reviewer_1,agent_retry_budget:C,agent_retry_budget,bounded local repair replan tool calling termination budget,C,"## Multi-agent roles
+
+The original requirement, search, candidate, model, operation, and review
+responsibilities remain distinct even though LangGraph now owns the shared
+state and transitions. Multi-agent value comes from role separation and
+verification boundaries, not from the number of model calls.
+
+## Tool Registry
+
+The Tool Registry publishes Pydantic JSON schemas and validates arguments
+before invoking data profiling, baseline evaluation, candidate benchmarking,
+knowledge retrieval, evidence validation, reporting, or sandbox execution.
+Unknown tool names and invalid parameters must fail explicitly.",,,
+reviewer_1,agent_retry_budget:D,agent_retry_budget,bounded local repair replan tool calling termination budget,D,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.",,,
+reviewer_1,agent_retry_budget:E,agent_retry_budget,bounded local repair replan tool calling termination budget,E,"## Offline and live modes
+
+The offline rule planner is deterministic and records zero model calls. Real
+Function Calling requires `allow_live_llm=true` and must report actual call
+counts separately. Simulated adapters and skipped live tests are not evidence
+of real model behavior.
+
+## Retry and termination budgets
+
+Workflow repair, revision, Tool Calling, and anomaly drill-down need explicit
+limits. A failed verifier can route to a bounded local repair or replan, while
+cancellation routes to a terminal state and should not silently continue work.",,,
+reviewer_1,data_units_schema:A,data_units_schema,target unit numeric coercion missingness unsupported schema,A,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.",,,
+reviewer_1,data_units_schema:B,data_units_schema,target unit numeric coercion missingness unsupported schema,B,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,data_units_schema:C,data_units_schema,target unit numeric coercion missingness unsupported schema,C,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,data_units_schema:D,data_units_schema,target unit numeric coercion missingness unsupported schema,D,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,data_units_schema:E,data_units_schema,target unit numeric coercion missingness unsupported schema,E,"## Target leakage denylist
+
+Target and auxiliary true-physics columns must never become model inputs. The
+project denylist includes `Tau0_Pa`, `tau_Pa`, `yield_stress`, `phi_max`,
+`m1_true`, and `m1_lf`. Hidden-variable predictions must be generated from
+allowed features, not copied from true hidden-state columns.
+
+## Split-aware preprocessing
+
+Imputation, scaling, encoding, and learned feature transforms must be fit only
+on each training fold or training split. Fitting preprocessing on all rows
+before cross-validation leaks validation distribution information and makes
+the reported metric optimistic.",,,
+reviewer_1,evidence_identity:A,evidence_identity,stable chunk_id text_hash document_version index_version citation,A,"## Retrieval evaluation
+
+Recall at k measures whether a labeled relevant source appears in the first k
+results. Mean reciprocal rank rewards placing the first relevant source near
+the top. Citation accuracy at one measures whether the first returned source
+matches the labeled source. Latency must be reported with the retrieval mode.",,,
+reviewer_1,evidence_identity:B,evidence_identity,stable chunk_id text_hash document_version index_version citation,B,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,evidence_identity:C,evidence_identity,stable chunk_id text_hash document_version index_version citation,C,"# Evidence And Index Governance
+
+Scope: evidence rules implemented by the YieldMind knowledge and safety tools.
+
+## Stable evidence identity
+
+Each indexed chunk has a stable `chunk_id`, `text_hash`, `document_id`,
+`document_version`, and `index_version`. Reports should retain these fields
+together with the source path so a cited passage can be checked later.
+
+## Traceability versus semantic support
+
+A valid chunk ID proves that an indexed chunk exists and matches its stored
+hash. It does not prove that the chunk semantically supports the generated
+claim. Citation accuracy therefore needs labeled relevance checks or human
+review in addition to identifier validation.",,,
+reviewer_1,evidence_identity:D,evidence_identity,stable chunk_id text_hash document_version index_version citation,D,"## Embedding profile isolation
+
+An index profile locks provider, model ID, revision, vector dimension,
+normalization, metric, and query/document instructions. Different embedding
+dimensions or model profiles must not share one Chroma collection. Re-indexing
+uses a new index version or isolated collection.
+
+## Document lifecycle
+
+Ingestion stores the document hash and version. Repeating the same source hash
+and index version is idempotent. Deleting a document marks its metadata as
+deleted and removes its vectors so normal retrieval does not cite it.",,,
+reviewer_1,evidence_identity:E,evidence_identity,stable chunk_id text_hash document_version index_version citation,E,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,data_split_preprocessing:A,data_split_preprocessing,fit scaling imputation only on training fold prevent leakage,A,"# Evaluation And Mechanism Ablation
+
+Scope: repository evaluation rules and acceptance semantics. Numerical model
+performance must come from an actual run artifact, never from this document.
+
+## Out-of-fold evaluation
+
+Training-set fit metrics are not accepted as generalization evidence. Baseline
+and candidate comparisons use held-out or out-of-fold predictions under the
+same split definition. The split seed and fold count belong in the run record.
+
+## Metrics
+
+Regression reports may include RMSE, MAE, and R2. RMSE preserves the target
+unit and emphasizes larger errors; MAE is more robust to a small number of
+large residuals; R2 is scale-relative and can be negative on held-out data.",,,
+reviewer_1,data_split_preprocessing:B,data_split_preprocessing,fit scaling imputation only on training fold prevent leakage,B,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,data_split_preprocessing:C,data_split_preprocessing,fit scaling imputation only on training fold prevent leakage,C,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,data_split_preprocessing:D,data_split_preprocessing,fit scaling imputation only on training fold prevent leakage,D,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,data_split_preprocessing:E,data_split_preprocessing,fit scaling imputation only on training fold prevent leakage,E,"## Target leakage denylist
+
+Target and auxiliary true-physics columns must never become model inputs. The
+project denylist includes `Tau0_Pa`, `tau_Pa`, `yield_stress`, `phi_max`,
+`m1_true`, and `m1_lf`. Hidden-variable predictions must be generated from
+allowed features, not copied from true hidden-state columns.
+
+## Split-aware preprocessing
+
+Imputation, scaling, encoding, and learned feature transforms must be fit only
+on each training fold or training split. Fitting preprocessing on all rows
+before cross-validation leaks validation distribution information and makes
+the reported metric optimistic.",,,
+reviewer_1,safety_cancel:A,safety_cancel,用户取消长时间运行任务后，怎样确保它启动的子进程也一起退出,A,"## Offline and live modes
+
+The offline rule planner is deterministic and records zero model calls. Real
+Function Calling requires `allow_live_llm=true` and must report actual call
+counts separately. Simulated adapters and skipped live tests are not evidence
+of real model behavior.
+
+## Retry and termination budgets
+
+Workflow repair, revision, Tool Calling, and anomaly drill-down need explicit
+limits. A failed verifier can route to a bounded local repair or replan, while
+cancellation routes to a terminal state and should not silently continue work.",,,
+reviewer_1,safety_cancel:B,safety_cancel,用户取消长时间运行任务后，怎样确保它启动的子进程也一起退出,B,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.",,,
+reviewer_1,safety_cancel:C,safety_cancel,用户取消长时间运行任务后，怎样确保它启动的子进程也一起退出,C,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,safety_cancel:D,safety_cancel,用户取消长时间运行任务后，怎样确保它启动的子进程也一起退出,D,"## Cancellation
+
+Long-running OperationAgent subprocesses start in a separate process group.
+Cancellation or timeout sends termination to the group and escalates to a kill
+signal after a grace period. This covers descendants created by that operation;
+ordinary synchronous Python tools still stop only at their supported boundary.
+
+## Secret handling
+
+Tool arguments, results, and event payloads pass through redaction before
+sensitive values are persisted. Authorization headers, API keys, passwords,
+database URLs, email addresses, and phone-like values are covered by the
+current redaction checks. Redaction reduces exposure but is not encryption.",,,
+reviewer_1,safety_cancel:E,safety_cancel,用户取消长时间运行任务后，怎样确保它启动的子进程也一起退出,E,"## Task state
+
+Queued and running tasks are persisted in PostgreSQL in the production path,
+while Redis/Celery provides dispatch. Lease and heartbeat fields support
+interruption detection and manual recovery. This is not a claim of PostgreSQL
+or Redis high availability.",,,
+reviewer_1,agent_multi_role:A,agent_multi_role,迁移到图编排后原来的多个智能体职责是否仍然保留，价值体现在哪里,A,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.",,,
+reviewer_1,agent_multi_role:B,agent_multi_role,迁移到图编排后原来的多个智能体职责是否仍然保留，价值体现在哪里,B,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,agent_multi_role:C,agent_multi_role,迁移到图编排后原来的多个智能体职责是否仍然保留，价值体现在哪里,C,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,agent_multi_role:D,agent_multi_role,迁移到图编排后原来的多个智能体职责是否仍然保留，价值体现在哪里,D,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,agent_multi_role:E,agent_multi_role,迁移到图编排后原来的多个智能体职责是否仍然保留，价值体现在哪里,E,"## Multi-agent roles
+
+The original requirement, search, candidate, model, operation, and review
+responsibilities remain distinct even though LangGraph now owns the shared
+state and transitions. Multi-agent value comes from role separation and
+verification boundaries, not from the number of model calls.
+
+## Tool Registry
+
+The Tool Registry publishes Pydantic JSON schemas and validates arguments
+before invoking data profiling, baseline evaluation, candidate benchmarking,
+knowledge retrieval, evidence validation, reporting, or sandbox execution.
+Unknown tool names and invalid parameters must fail explicitly.",,,
+reviewer_1,mechanism_hidden_variable:A,mechanism_hidden_variable,hidden physical variable phi_m m1_eff validity diagnostics,A,"## Target leakage denylist
+
+Target and auxiliary true-physics columns must never become model inputs. The
+project denylist includes `Tau0_Pa`, `tau_Pa`, `yield_stress`, `phi_max`,
+`m1_true`, and `m1_lf`. Hidden-variable predictions must be generated from
+allowed features, not copied from true hidden-state columns.
+
+## Split-aware preprocessing
+
+Imputation, scaling, encoding, and learned feature transforms must be fit only
+on each training fold or training split. Fitting preprocessing on all rows
+before cross-validation leaks validation distribution information and makes
+the reported metric optimistic.",,,
+reviewer_1,mechanism_hidden_variable:B,mechanism_hidden_variable,hidden physical variable phi_m m1_eff validity diagnostics,B,"## Mechanism ablation
+
+When a generated model claims a physics mechanism helps, compare
+`with_mechanism` and `without_mechanism` under the same folds, preprocessing,
+features, and budget. Record delta RMSE and delta R2. A marginal change should
+not be presented as strong physical validation.
+
+## Evaluation set boundary
+
+The offline Agent regression set measures workflow behavior such as tool
+routing and artifact checks. It does not measure a real LLM when the report
+records zero real model calls, and it does not establish production accuracy.",,,
+reviewer_1,mechanism_hidden_variable:C,mechanism_hidden_variable,hidden physical variable phi_m m1_eff validity diagnostics,C,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,mechanism_hidden_variable:D,mechanism_hidden_variable,hidden physical variable phi_m m1_eff validity diagnostics,D,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,mechanism_hidden_variable:E,mechanism_hidden_variable,hidden physical variable phi_m m1_eff validity diagnostics,E,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,evidence_lifecycle:A,evidence_lifecycle,document hash idempotent delete metadata vectors retrieval,A,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,evidence_lifecycle:B,evidence_lifecycle,document hash idempotent delete metadata vectors retrieval,B,"## Embedding profile isolation
+
+An index profile locks provider, model ID, revision, vector dimension,
+normalization, metric, and query/document instructions. Different embedding
+dimensions or model profiles must not share one Chroma collection. Re-indexing
+uses a new index version or isolated collection.
+
+## Document lifecycle
+
+Ingestion stores the document hash and version. Repeating the same source hash
+and index version is idempotent. Deleting a document marks its metadata as
+deleted and removes its vectors so normal retrieval does not cite it.",,,
+reviewer_1,evidence_lifecycle:C,evidence_lifecycle,document hash idempotent delete metadata vectors retrieval,C,"## Retrieval evaluation
+
+Recall at k measures whether a labeled relevant source appears in the first k
+results. Mean reciprocal rank rewards placing the first relevant source near
+the top. Citation accuracy at one measures whether the first returned source
+matches the labeled source. Latency must be reported with the retrieval mode.",,,
+reviewer_1,evidence_lifecycle:D,evidence_lifecycle,document hash idempotent delete metadata vectors retrieval,D,"# Evidence And Index Governance
+
+Scope: evidence rules implemented by the YieldMind knowledge and safety tools.
+
+## Stable evidence identity
+
+Each indexed chunk has a stable `chunk_id`, `text_hash`, `document_id`,
+`document_version`, and `index_version`. Reports should retain these fields
+together with the source path so a cited passage can be checked later.
+
+## Traceability versus semantic support
+
+A valid chunk ID proves that an indexed chunk exists and matches its stored
+hash. It does not prove that the chunk semantically supports the generated
+claim. Citation accuracy therefore needs labeled relevance checks or human
+review in addition to identifier validation.",,,
+reviewer_1,evidence_lifecycle:E,evidence_lifecycle,document hash idempotent delete metadata vectors retrieval,E,"## Multi-agent roles
+
+The original requirement, search, candidate, model, operation, and review
+responsibilities remain distinct even though LangGraph now owns the shared
+state and transitions. Multi-agent value comes from role separation and
+verification boundaries, not from the number of model calls.
+
+## Tool Registry
+
+The Tool Registry publishes Pydantic JSON schemas and validates arguments
+before invoking data profiling, baseline evaluation, candidate benchmarking,
+knowledge retrieval, evidence validation, reporting, or sandbox execution.
+Unknown tool names and invalid parameters must fail explicitly.",,,
+reviewer_1,mechanism_yodel:A,mechanism_yodel,YODEL phi phi_m contact network dense suspension,A,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,mechanism_yodel:B,mechanism_yodel,YODEL phi phi_m contact network dense suspension,B,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,mechanism_yodel:C,mechanism_yodel,YODEL phi phi_m contact network dense suspension,C,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,mechanism_yodel:D,mechanism_yodel,YODEL phi phi_m contact network dense suspension,D,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,mechanism_yodel:E,mechanism_yodel,YODEL phi phi_m contact network dense suspension,E,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,eval_fixed_baseline:A,eval_fixed_baseline,run_fixed_baseline_eval deterministic reference normalized schema,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,eval_fixed_baseline:B,eval_fixed_baseline,run_fixed_baseline_eval deterministic reference normalized schema,B,"## Offline and live modes
+
+The offline rule planner is deterministic and records zero model calls. Real
+Function Calling requires `allow_live_llm=true` and must report actual call
+counts separately. Simulated adapters and skipped live tests are not evidence
+of real model behavior.
+
+## Retry and termination budgets
+
+Workflow repair, revision, Tool Calling, and anomaly drill-down need explicit
+limits. A failed verifier can route to a bounded local repair or replan, while
+cancellation routes to a terminal state and should not silently continue work.",,,
+reviewer_1,eval_fixed_baseline:C,eval_fixed_baseline,run_fixed_baseline_eval deterministic reference normalized schema,C,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,eval_fixed_baseline:D,eval_fixed_baseline,run_fixed_baseline_eval deterministic reference normalized schema,D,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,eval_fixed_baseline:E,eval_fixed_baseline,run_fixed_baseline_eval deterministic reference normalized schema,E,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.",,,
+reviewer_1,evidence_semantic_support:A,evidence_semantic_support,引用编号存在就代表生成结论一定被原文支持吗，还需要什么检查,A,"# Evidence And Index Governance
+
+Scope: evidence rules implemented by the YieldMind knowledge and safety tools.
+
+## Stable evidence identity
+
+Each indexed chunk has a stable `chunk_id`, `text_hash`, `document_id`,
+`document_version`, and `index_version`. Reports should retain these fields
+together with the source path so a cited passage can be checked later.
+
+## Traceability versus semantic support
+
+A valid chunk ID proves that an indexed chunk exists and matches its stored
+hash. It does not prove that the chunk semantically supports the generated
+claim. Citation accuracy therefore needs labeled relevance checks or human
+review in addition to identifier validation.",,,
+reviewer_1,evidence_semantic_support:B,evidence_semantic_support,引用编号存在就代表生成结论一定被原文支持吗，还需要什么检查,B,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,evidence_semantic_support:C,evidence_semantic_support,引用编号存在就代表生成结论一定被原文支持吗，还需要什么检查,C,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,evidence_semantic_support:D,evidence_semantic_support,引用编号存在就代表生成结论一定被原文支持吗，还需要什么检查,D,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,evidence_semantic_support:E,evidence_semantic_support,引用编号存在就代表生成结论一定被原文支持吗，还需要什么检查,E,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,eval_ablation:A,eval_ablation,with_mechanism without_mechanism delta RMSE delta R2 same folds,A,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,eval_ablation:B,eval_ablation,with_mechanism without_mechanism delta RMSE delta R2 same folds,B,"## Mechanism ablation
+
+When a generated model claims a physics mechanism helps, compare
+`with_mechanism` and `without_mechanism` under the same folds, preprocessing,
+features, and budget. Record delta RMSE and delta R2. A marginal change should
+not be presented as strong physical validation.
+
+## Evaluation set boundary
+
+The offline Agent regression set measures workflow behavior such as tool
+routing and artifact checks. It does not measure a real LLM when the report
+records zero real model calls, and it does not establish production accuracy.",,,
+reviewer_1,eval_ablation:C,eval_ablation,with_mechanism without_mechanism delta RMSE delta R2 same folds,C,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.",,,
+reviewer_1,eval_ablation:D,eval_ablation,with_mechanism without_mechanism delta RMSE delta R2 same folds,D,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,eval_ablation:E,eval_ablation,with_mechanism without_mechanism delta RMSE delta R2 same folds,E,"# Evaluation And Mechanism Ablation
+
+Scope: repository evaluation rules and acceptance semantics. Numerical model
+performance must come from an actual run artifact, never from this document.
+
+## Out-of-fold evaluation
+
+Training-set fit metrics are not accepted as generalization evidence. Baseline
+and candidate comparisons use held-out or out-of-fold predictions under the
+same split definition. The split seed and fold count belong in the run record.
+
+## Metrics
+
+Regression reports may include RMSE, MAE, and R2. RMSE preserves the target
+unit and emphasizes larger errors; MAE is more robust to a small number of
+large residuals; R2 is scale-relative and can be negative on held-out data.",,,
+reviewer_1,safety_task_state:A,safety_task_state,PostgreSQL Redis Celery lease heartbeat manual recovery high availability,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,safety_task_state:B,safety_task_state,PostgreSQL Redis Celery lease heartbeat manual recovery high availability,B,"## Offline and live modes
+
+The offline rule planner is deterministic and records zero model calls. Real
+Function Calling requires `allow_live_llm=true` and must report actual call
+counts separately. Simulated adapters and skipped live tests are not evidence
+of real model behavior.
+
+## Retry and termination budgets
+
+Workflow repair, revision, Tool Calling, and anomaly drill-down need explicit
+limits. A failed verifier can route to a bounded local repair or replan, while
+cancellation routes to a terminal state and should not silently continue work.",,,
+reviewer_1,safety_task_state:C,safety_task_state,PostgreSQL Redis Celery lease heartbeat manual recovery high availability,C,"## Task state
+
+Queued and running tasks are persisted in PostgreSQL in the production path,
+while Redis/Celery provides dispatch. Lease and heartbeat fields support
+interruption detection and manual recovery. This is not a claim of PostgreSQL
+or Redis high availability.",,,
+reviewer_1,safety_task_state:D,safety_task_state,PostgreSQL Redis Celery lease heartbeat manual recovery high availability,D,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,safety_task_state:E,safety_task_state,PostgreSQL Redis Celery lease heartbeat manual recovery high availability,E,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,evidence_embedding_profile:A,evidence_embedding_profile,embedding model revision dimension normalization metric profile isolation,A,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.",,,
+reviewer_1,evidence_embedding_profile:B,evidence_embedding_profile,embedding model revision dimension normalization metric profile isolation,B,"## Embedding profile isolation
+
+An index profile locks provider, model ID, revision, vector dimension,
+normalization, metric, and query/document instructions. Different embedding
+dimensions or model profiles must not share one Chroma collection. Re-indexing
+uses a new index version or isolated collection.
+
+## Document lifecycle
+
+Ingestion stores the document hash and version. Repeating the same source hash
+and index version is idempotent. Deleting a document marks its metadata as
+deleted and removes its vectors so normal retrieval does not cite it.",,,
+reviewer_1,evidence_embedding_profile:C,evidence_embedding_profile,embedding model revision dimension normalization metric profile isolation,C,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,evidence_embedding_profile:D,evidence_embedding_profile,embedding model revision dimension normalization metric profile isolation,D,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,evidence_embedding_profile:E,evidence_embedding_profile,embedding model revision dimension normalization metric profile isolation,E,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.",,,
+reviewer_1,mechanism_alternatives:A,mechanism_alternatives,Bingham Herschel-Bulkley Casson thixotropic candidate relations,A,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,mechanism_alternatives:B,mechanism_alternatives,Bingham Herschel-Bulkley Casson thixotropic candidate relations,B,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,mechanism_alternatives:C,mechanism_alternatives,Bingham Herschel-Bulkley Casson thixotropic candidate relations,C,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.",,,
+reviewer_1,mechanism_alternatives:D,mechanism_alternatives,Bingham Herschel-Bulkley Casson thixotropic candidate relations,D,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,mechanism_alternatives:E,mechanism_alternatives,Bingham Herschel-Bulkley Casson thixotropic candidate relations,E,"## Alternative rheology families
+
+Bingham, Herschel-Bulkley, Casson, DLVO-inspired relations, and thixotropic
+structural kinetics are search directions rather than mandatory choices. The
+generated model must document the exact equation, source, column mapping, and
+reason for use, or explicitly state that no mechanism was used.
+
+## Mechanism evidence boundary
+
+A mechanism name or plausible formula does not establish predictive benefit.
+The claim requires a controlled ablation under the same data split and
+preprocessing protocol. Physical plausibility and held-out predictive quality
+are separate acceptance dimensions.",,,
+reviewer_1,safety_docker:A,safety_docker,Docker sandbox network disabled CPU memory pids API keys,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,safety_docker:B,safety_docker,Docker sandbox network disabled CPU memory pids API keys,B,"## Cancellation
+
+Long-running OperationAgent subprocesses start in a separate process group.
+Cancellation or timeout sends termination to the group and escalates to a kill
+signal after a grace period. This covers descendants created by that operation;
+ordinary synchronous Python tools still stop only at their supported boundary.
+
+## Secret handling
+
+Tool arguments, results, and event payloads pass through redaction before
+sensitive values are persisted. Authorization headers, API keys, passwords,
+database URLs, email addresses, and phone-like values are covered by the
+current redaction checks. Redaction reduces exposure but is not encryption.",,,
+reviewer_1,safety_docker:C,safety_docker,Docker sandbox network disabled CPU memory pids API keys,C,"# Execution Isolation And Safety
+
+Scope: execution guarantees implemented by the current sandbox, process
+control, redaction, and task-state code.
+
+## Command construction
+
+Execution tools accept an argument vector instead of a shell command string.
+Avoiding `shell=True` prevents shell metacharacters from changing command
+meaning. Working directories and environment variables are passed explicitly.
+
+## Container isolation
+
+The Docker sandbox runs with networking disabled and applies CPU, memory, and
+process-count limits. The image contains fixed numerical dependencies and does
+not bake host API keys into an image layer. Docker execution still requires an
+explicit authorization flag.",,,
+reviewer_1,safety_docker:D,safety_docker,Docker sandbox network disabled CPU memory pids API keys,D,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,safety_docker:E,safety_docker,Docker sandbox network disabled CPU memory pids API keys,E,"## Multi-agent roles
+
+The original requirement, search, candidate, model, operation, and review
+responsibilities remain distinct even though LangGraph now owns the shared
+state and transitions. Multi-agent value comes from role separation and
+verification boundaries, not from the number of model calls.
+
+## Tool Registry
+
+The Tool Registry publishes Pydantic JSON schemas and validates arguments
+before invoking data profiling, baseline evaluation, candidate benchmarking,
+knowledge retrieval, evidence validation, reporting, or sandbox execution.
+Unknown tool names and invalid parameters must fail explicitly.",,,
+reviewer_1,data_supported_layouts:A,data_supported_layouts,Lian Zhou supported column layouts Phi d_s_um powder,A,"## Alternative rheology families
+
+Bingham, Herschel-Bulkley, Casson, DLVO-inspired relations, and thixotropic
+structural kinetics are search directions rather than mandatory choices. The
+generated model must document the exact equation, source, column mapping, and
+reason for use, or explicitly state that no mechanism was used.
+
+## Mechanism evidence boundary
+
+A mechanism name or plausible formula does not establish predictive benefit.
+The claim requires a controlled ablation under the same data split and
+preprocessing protocol. Physical plausibility and held-out predictive quality
+are separate acceptance dimensions.",,,
+reviewer_1,data_supported_layouts:B,data_supported_layouts,Lian Zhou supported column layouts Phi d_s_um powder,B,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,data_supported_layouts:C,data_supported_layouts,Lian Zhou supported column layouts Phi d_s_um powder,C,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,data_supported_layouts:D,data_supported_layouts,Lian Zhou supported column layouts Phi d_s_um powder,D,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,data_supported_layouts:E,data_supported_layouts,Lian Zhou supported column layouts Phi d_s_um powder,E,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,eval_oof:A,eval_oof,为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置,A,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,eval_oof:B,eval_oof,为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置,B,"## Mechanism ablation
+
+When a generated model claims a physics mechanism helps, compare
+`with_mechanism` and `without_mechanism` under the same folds, preprocessing,
+features, and budget. Record delta RMSE and delta R2. A marginal change should
+not be presented as strong physical validation.
+
+## Evaluation set boundary
+
+The offline Agent regression set measures workflow behavior such as tool
+routing and artifact checks. It does not measure a real LLM when the report
+records zero real model calls, and it does not establish production accuracy.",,,
+reviewer_1,eval_oof:C,eval_oof,为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置,C,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,eval_oof:D,eval_oof,为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置,D,"# Evaluation And Mechanism Ablation
+
+Scope: repository evaluation rules and acceptance semantics. Numerical model
+performance must come from an actual run artifact, never from this document.
+
+## Out-of-fold evaluation
+
+Training-set fit metrics are not accepted as generalization evidence. Baseline
+and candidate comparisons use held-out or out-of-fold predictions under the
+same split definition. The split seed and fold count belong in the run record.
+
+## Metrics
+
+Regression reports may include RMSE, MAE, and R2. RMSE preserves the target
+unit and emphasizes larger errors; MAE is more robust to a small number of
+large residuals; R2 is scale-relative and can be negative on held-out data.",,,
+reviewer_1,eval_oof:E,eval_oof,为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置,E,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,safety_argv:A,safety_argv,argument vector avoid shell true metacharacters,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,safety_argv:B,safety_argv,argument vector avoid shell true metacharacters,B,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,safety_argv:C,safety_argv,argument vector avoid shell true metacharacters,C,"## Target leakage denylist
+
+Target and auxiliary true-physics columns must never become model inputs. The
+project denylist includes `Tau0_Pa`, `tau_Pa`, `yield_stress`, `phi_max`,
+`m1_true`, and `m1_lf`. Hidden-variable predictions must be generated from
+allowed features, not copied from true hidden-state columns.
+
+## Split-aware preprocessing
+
+Imputation, scaling, encoding, and learned feature transforms must be fit only
+on each training fold or training split. Fitting preprocessing on all rows
+before cross-validation leaks validation distribution information and makes
+the reported metric optimistic.",,,
+reviewer_1,safety_argv:D,safety_argv,argument vector avoid shell true metacharacters,D,"# Execution Isolation And Safety
+
+Scope: execution guarantees implemented by the current sandbox, process
+control, redaction, and task-state code.
+
+## Command construction
+
+Execution tools accept an argument vector instead of a shell command string.
+Avoiding `shell=True` prevents shell metacharacters from changing command
+meaning. Working directories and environment variables are passed explicitly.
+
+## Container isolation
+
+The Docker sandbox runs with networking disabled and applies CPU, memory, and
+process-count limits. The image contains fixed numerical dependencies and does
+not bake host API keys into an image layer. Docker execution still requires an
+explicit authorization flag.",,,
+reviewer_1,safety_argv:E,safety_argv,argument vector avoid shell true metacharacters,E,"## Offline and live modes
+
+The offline rule planner is deterministic and records zero model calls. Real
+Function Calling requires `allow_live_llm=true` and must report actual call
+counts separately. Simulated adapters and skipped live tests are not evidence
+of real model behavior.
+
+## Retry and termination budgets
+
+Workflow repair, revision, Tool Calling, and anomaly drill-down need explicit
+limits. A failed verifier can route to a bounded local repair or replan, while
+cancellation routes to a terminal state and should not silently continue work.",,,
+reviewer_1,eval_metrics:A,eval_metrics,RMSE MAE R2 negative held-out metric interpretation,A,"## Alternative rheology families
+
+Bingham, Herschel-Bulkley, Casson, DLVO-inspired relations, and thixotropic
+structural kinetics are search directions rather than mandatory choices. The
+generated model must document the exact equation, source, column mapping, and
+reason for use, or explicitly state that no mechanism was used.
+
+## Mechanism evidence boundary
+
+A mechanism name or plausible formula does not establish predictive benefit.
+The claim requires a controlled ablation under the same data split and
+preprocessing protocol. Physical plausibility and held-out predictive quality
+are separate acceptance dimensions.",,,
+reviewer_1,eval_metrics:B,eval_metrics,RMSE MAE R2 negative held-out metric interpretation,B,"# Evaluation And Mechanism Ablation
+
+Scope: repository evaluation rules and acceptance semantics. Numerical model
+performance must come from an actual run artifact, never from this document.
+
+## Out-of-fold evaluation
+
+Training-set fit metrics are not accepted as generalization evidence. Baseline
+and candidate comparisons use held-out or out-of-fold predictions under the
+same split definition. The split seed and fold count belong in the run record.
+
+## Metrics
+
+Regression reports may include RMSE, MAE, and R2. RMSE preserves the target
+unit and emphasizes larger errors; MAE is more robust to a small number of
+large residuals; R2 is scale-relative and can be negative on held-out data.",,,
+reviewer_1,eval_metrics:C,eval_metrics,RMSE MAE R2 negative held-out metric interpretation,C,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,eval_metrics:D,eval_metrics,RMSE MAE R2 negative held-out metric interpretation,D,"## Mechanism ablation
+
+When a generated model claims a physics mechanism helps, compare
+`with_mechanism` and `without_mechanism` under the same folds, preprocessing,
+features, and budget. Record delta RMSE and delta R2. A marginal change should
+not be presented as strong physical validation.
+
+## Evaluation set boundary
+
+The offline Agent regression set measures workflow behavior such as tool
+routing and artifact checks. It does not measure a real LLM when the report
+records zero real model calls, and it does not establish production accuracy.",,,
+reviewer_1,eval_metrics:E,eval_metrics,RMSE MAE R2 negative held-out metric interpretation,E,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,eval_candidate_benchmark:A,eval_candidate_benchmark,run_candidate_benchmark selection audit compare folds,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,eval_candidate_benchmark:B,eval_candidate_benchmark,run_candidate_benchmark selection audit compare folds,B,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,eval_candidate_benchmark:C,eval_candidate_benchmark,run_candidate_benchmark selection audit compare folds,C,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.",,,
+reviewer_1,eval_candidate_benchmark:D,eval_candidate_benchmark,run_candidate_benchmark selection audit compare folds,D,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,eval_candidate_benchmark:E,eval_candidate_benchmark,run_candidate_benchmark selection audit compare folds,E,"## Mechanism ablation
+
+When a generated model claims a physics mechanism helps, compare
+`with_mechanism` and `without_mechanism` under the same folds, preprocessing,
+features, and budget. Record delta RMSE and delta R2. A marginal change should
+not be presented as strong physical validation.
+
+## Evaluation set boundary
+
+The offline Agent regression set measures workflow behavior such as tool
+routing and artifact checks. It does not measure a real LLM when the report
+records zero real model calls, and it does not establish production accuracy.",,,
+reviewer_1,agent_stategraph:A,agent_stategraph,LangGraph domain workflow explicit nodes conditional edges revision cancellation,A,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.",,,
+reviewer_1,agent_stategraph:B,agent_stategraph,LangGraph domain workflow explicit nodes conditional edges revision cancellation,B,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,agent_stategraph:C,agent_stategraph,LangGraph domain workflow explicit nodes conditional edges revision cancellation,C,"## Offline and live modes
+
+The offline rule planner is deterministic and records zero model calls. Real
+Function Calling requires `allow_live_llm=true` and must report actual call
+counts separately. Simulated adapters and skipped live tests are not evidence
+of real model behavior.
+
+## Retry and termination budgets
+
+Workflow repair, revision, Tool Calling, and anomaly drill-down need explicit
+limits. A failed verifier can route to a bounded local repair or replan, while
+cancellation routes to a terminal state and should not silently continue work.",,,
+reviewer_1,agent_stategraph:D,agent_stategraph,LangGraph domain workflow explicit nodes conditional edges revision cancellation,D,"## Multi-agent roles
+
+The original requirement, search, candidate, model, operation, and review
+responsibilities remain distinct even though LangGraph now owns the shared
+state and transitions. Multi-agent value comes from role separation and
+verification boundaries, not from the number of model calls.
+
+## Tool Registry
+
+The Tool Registry publishes Pydantic JSON schemas and validates arguments
+before invoking data profiling, baseline evaluation, candidate benchmarking,
+knowledge retrieval, evidence validation, reporting, or sandbox execution.
+Unknown tool names and invalid parameters must fail explicitly.",,,
+reviewer_1,agent_stategraph:E,agent_stategraph,LangGraph domain workflow explicit nodes conditional edges revision cancellation,E,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,mechanism_lian:A,mechanism_lian,Lian Phi SP_percent Tau0_Pa effective packing state,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,mechanism_lian:B,mechanism_lian,Lian Phi SP_percent Tau0_Pa effective packing state,B,"## Task state
+
+Queued and running tasks are persisted in PostgreSQL in the production path,
+while Redis/Celery provides dispatch. Lease and heartbeat fields support
+interruption detection and manual recovery. This is not a claim of PostgreSQL
+or Redis high availability.",,,
+reviewer_1,mechanism_lian:C,mechanism_lian,Lian Phi SP_percent Tau0_Pa effective packing state,C,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,mechanism_lian:D,mechanism_lian,Lian Phi SP_percent Tau0_Pa effective packing state,D,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,mechanism_lian:E,mechanism_lian,Lian Phi SP_percent Tau0_Pa effective packing state,E,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,evidence_metrics:A,evidence_metrics,Recall at k mean reciprocal rank citation accuracy latency,A,"## Retrieval evaluation
+
+Recall at k measures whether a labeled relevant source appears in the first k
+results. Mean reciprocal rank rewards placing the first relevant source near
+the top. Citation accuracy at one measures whether the first returned source
+matches the labeled source. Latency must be reported with the retrieval mode.",,,
+reviewer_1,evidence_metrics:B,evidence_metrics,Recall at k mean reciprocal rank citation accuracy latency,B,"## Mechanism ablation
+
+When a generated model claims a physics mechanism helps, compare
+`with_mechanism` and `without_mechanism` under the same folds, preprocessing,
+features, and budget. Record delta RMSE and delta R2. A marginal change should
+not be presented as strong physical validation.
+
+## Evaluation set boundary
+
+The offline Agent regression set measures workflow behavior such as tool
+routing and artifact checks. It does not measure a real LLM when the report
+records zero real model calls, and it does not establish production accuracy.",,,
+reviewer_1,evidence_metrics:C,evidence_metrics,Recall at k mean reciprocal rank citation accuracy latency,C,"## Cancellation
+
+Long-running OperationAgent subprocesses start in a separate process group.
+Cancellation or timeout sends termination to the group and escalates to a kill
+signal after a grace period. This covers descendants created by that operation;
+ordinary synchronous Python tools still stop only at their supported boundary.
+
+## Secret handling
+
+Tool arguments, results, and event payloads pass through redaction before
+sensitive values are persisted. Authorization headers, API keys, passwords,
+database URLs, email addresses, and phone-like values are covered by the
+current redaction checks. Redaction reduces exposure but is not encryption.",,,
+reviewer_1,evidence_metrics:D,evidence_metrics,Recall at k mean reciprocal rank citation accuracy latency,D,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,evidence_metrics:E,evidence_metrics,Recall at k mean reciprocal rank citation accuracy latency,E,"# Evidence And Index Governance
+
+Scope: evidence rules implemented by the YieldMind knowledge and safety tools.
+
+## Stable evidence identity
+
+Each indexed chunk has a stable `chunk_id`, `text_hash`, `document_id`,
+`document_version`, and `index_version`. Reports should retain these fields
+together with the source path so a cited passage can be checked later.
+
+## Traceability versus semantic support
+
+A valid chunk ID proves that an indexed chunk exists and matches its stored
+hash. It does not prove that the chunk semantically supports the generated
+claim. Citation accuracy therefore needs labeled relevance checks or human
+review in addition to identifier validation.",,,
+reviewer_1,mechanism_claim_boundary:A,mechanism_claim_boundary,一个看起来合理的物理公式是否足以证明模型预测有提升,A,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,mechanism_claim_boundary:B,mechanism_claim_boundary,一个看起来合理的物理公式是否足以证明模型预测有提升,B,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.",,,
+reviewer_1,mechanism_claim_boundary:C,mechanism_claim_boundary,一个看起来合理的物理公式是否足以证明模型预测有提升,C,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,mechanism_claim_boundary:D,mechanism_claim_boundary,一个看起来合理的物理公式是否足以证明模型预测有提升,D,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,mechanism_claim_boundary:E,mechanism_claim_boundary,一个看起来合理的物理公式是否足以证明模型预测有提升,E,"## Alternative rheology families
+
+Bingham, Herschel-Bulkley, Casson, DLVO-inspired relations, and thixotropic
+structural kinetics are search directions rather than mandatory choices. The
+generated model must document the exact equation, source, column mapping, and
+reason for use, or explicitly state that no mechanism was used.
+
+## Mechanism evidence boundary
+
+A mechanism name or plausible formula does not establish predictive benefit.
+The claim requires a controlled ablation under the same data split and
+preprocessing protocol. Physical plausibility and held-out predictive quality
+are separate acceptance dimensions.",,,
+reviewer_1,agent_tool_registry:A,agent_tool_registry,Tool Registry Pydantic schema invalid parameters unknown tools,A,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,agent_tool_registry:B,agent_tool_registry,Tool Registry Pydantic schema invalid parameters unknown tools,B,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.",,,
+reviewer_1,agent_tool_registry:C,agent_tool_registry,Tool Registry Pydantic schema invalid parameters unknown tools,C,"## Multi-agent roles
+
+The original requirement, search, candidate, model, operation, and review
+responsibilities remain distinct even though LangGraph now owns the shared
+state and transitions. Multi-agent value comes from role separation and
+verification boundaries, not from the number of model calls.
+
+## Tool Registry
+
+The Tool Registry publishes Pydantic JSON schemas and validates arguments
+before invoking data profiling, baseline evaluation, candidate benchmarking,
+knowledge retrieval, evidence validation, reporting, or sandbox execution.
+Unknown tool names and invalid parameters must fail explicitly.",,,
+reviewer_1,agent_tool_registry:D,agent_tool_registry,Tool Registry Pydantic schema invalid parameters unknown tools,D,"# Evidence And Index Governance
+
+Scope: evidence rules implemented by the YieldMind knowledge and safety tools.
+
+## Stable evidence identity
+
+Each indexed chunk has a stable `chunk_id`, `text_hash`, `document_id`,
+`document_version`, and `index_version`. Reports should retain these fields
+together with the source path so a cited passage can be checked later.
+
+## Traceability versus semantic support
+
+A valid chunk ID proves that an indexed chunk exists and matches its stored
+hash. It does not prove that the chunk semantically supports the generated
+claim. Citation accuracy therefore needs labeled relevance checks or human
+review in addition to identifier validation.",,,
+reviewer_1,agent_tool_registry:E,agent_tool_registry,Tool Registry Pydantic schema invalid parameters unknown tools,E,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.",,,
+reviewer_1,data_distribution_shift:A,data_distribution_shift,新配方和不同生产批次上线前应该怎样设计留出验证以检查分布漂移,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.",,,
+reviewer_1,data_distribution_shift:B,data_distribution_shift,新配方和不同生产批次上线前应该怎样设计留出验证以检查分布漂移,B,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.",,,
+reviewer_1,data_distribution_shift:C,data_distribution_shift,新配方和不同生产批次上线前应该怎样设计留出验证以检查分布漂移,C,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",,,
+reviewer_1,data_distribution_shift:D,data_distribution_shift,新配方和不同生产批次上线前应该怎样设计留出验证以检查分布漂移,D,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.",,,
+reviewer_1,data_distribution_shift:E,data_distribution_shift,新配方和不同生产批次上线前应该怎样设计留出验证以检查分布漂移,E,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.",,,
+reviewer_1,agent_offline_live:A,agent_offline_live,offline rule planner real Function Calling allow_live_llm model counts,A,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.",,,
+reviewer_1,agent_offline_live:B,agent_offline_live,offline rule planner real Function Calling allow_live_llm model counts,B,"## Multi-agent roles
+
+The original requirement, search, candidate, model, operation, and review
+responsibilities remain distinct even though LangGraph now owns the shared
+state and transitions. Multi-agent value comes from role separation and
+verification boundaries, not from the number of model calls.
+
+## Tool Registry
+
+The Tool Registry publishes Pydantic JSON schemas and validates arguments
+before invoking data profiling, baseline evaluation, candidate benchmarking,
+knowledge retrieval, evidence validation, reporting, or sandbox execution.
+Unknown tool names and invalid parameters must fail explicitly.",,,
+reviewer_1,agent_offline_live:C,agent_offline_live,offline rule planner real Function Calling allow_live_llm model counts,C,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.",,,
+reviewer_1,agent_offline_live:D,agent_offline_live,offline rule planner real Function Calling allow_live_llm model counts,D,"## Offline and live modes
+
+The offline rule planner is deterministic and records zero model calls. Real
+Function Calling requires `allow_live_llm=true` and must report actual call
+counts separately. Simulated adapters and skipped live tests are not evidence
+of real model behavior.
+
+## Retry and termination budgets
+
+Workflow repair, revision, Tool Calling, and anomaly drill-down need explicit
+limits. A failed verifier can route to a bounded local repair or replan, while
+cancellation routes to a terminal state and should not silently continue work.",,,
+reviewer_1,agent_offline_live:E,agent_offline_live,offline rule planner real Function Calling allow_live_llm model counts,E,"## Mechanism ablation
+
+When a generated model claims a physics mechanism helps, compare
+`with_mechanism` and `without_mechanism` under the same folds, preprocessing,
+features, and budget. Record delta RMSE and delta R2. A marginal change should
+not be presented as strong physical validation.
+
+## Evaluation set boundary
+
+The offline Agent regression set measures workflow behavior such as tool
+routing and artifact checks. It does not measure a real LLM when the report
+records zero real model calls, and it does not establish production accuracy.",,,

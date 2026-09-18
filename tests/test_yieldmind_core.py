@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import subprocess
 import sys
@@ -891,6 +892,10 @@ def test_knowledge_ingest_and_search(tmp_path: Path) -> None:
     assert ingest["documents"][0]["status"] == "available"
     again = kb.ingest(KnowledgeIngestRequest(paths=[str(doc)], chunk_size=300, chunk_overlap=20))
     assert again["documents"][0]["idempotent"] is True
+    assert again["split_version"] == "recursive_chars_300_20_v1"
+    rechunked = kb.ingest(KnowledgeIngestRequest(paths=[str(doc)], chunk_size=350, chunk_overlap=20))
+    assert rechunked["documents"][0]["idempotent"] is False
+    assert rechunked["split_version"] == "recursive_chars_350_20_v1"
     result = kb.search(KnowledgeSearchRequest(query="YODEL packing phi_m yield stress", top_k=2))
     assert result["hits"]
     assert result["hits"][0]["chunk_id"].startswith("chk_")
@@ -936,6 +941,19 @@ def test_knowledge_bm25_hybrid_and_profile_isolation(tmp_path: Path) -> None:
         alternate_kb.search(KnowledgeSearchRequest(query="packing"))
     with pytest.raises(ValueError, match="immutable model revision"):
         EmbeddingProfile(provider="sentence_transformers", model_id="Qwen/Qwen3-Embedding-0.6B", revision="main")
+
+
+def test_rrf_tie_break_does_not_depend_on_chunk_id() -> None:
+    source_a = {"chunk_id": "z-hash", "source_path": "/repo/a.md", "chunk_index": 2}
+    source_b = {"chunk_id": "a-hash", "source_path": "/repo/b.md", "chunk_index": 0}
+    ranked = KnowledgeBase._rrf([source_b, source_a], [source_a, source_b], top_k=2)
+    assert [hit["source_path"] for hit in ranked] == ["/repo/a.md", "/repo/b.md"]
+    assert ranked[0]["retrieval_channel_ranks"] == {"vector": 2, "bm25": 1}
+
+    source_a["chunk_id"] = "a-new-hash"
+    source_b["chunk_id"] = "z-new-hash"
+    reindexed = KnowledgeBase._rrf([source_b, source_a], [source_a, source_b], top_k=2)
+    assert [hit["source_path"] for hit in reindexed] == ["/repo/a.md", "/repo/b.md"]
 
 
 def test_http_embedding_client_requires_loopback_endpoint() -> None:
@@ -1105,6 +1123,70 @@ def test_retrieval_evaluation_explains_source_and_term_failures() -> None:
     assert source["source_match_rank"] is None
     assert source["terms_match_rank"] == 1
     assert "/private/" not in json.dumps(report)
+
+
+def test_retrieval_review_pack_is_blind_and_not_overwritten(tmp_path: Path) -> None:
+    from scripts.prepare_yieldmind_retrieval_review import prepare_review_pack
+
+    sources_root = tmp_path / "sources"
+    sources_root.mkdir()
+    source = sources_root / "domain.md"
+    source.write_text("Relevant evidence for the review candidate.", encoding="utf-8")
+    report = {
+        "baselines": {
+            "hybrid": {
+                "cases": [
+                    {
+                        "id": "case_1",
+                        "query": "What evidence is relevant?",
+                        "candidates": [
+                            {
+                                "rank": 1,
+                                "chunk_id": "chunk-secret-map",
+                                "source_path": "sources/domain.md",
+                                "chunk_index": 0,
+                                "retrieval_channels": ["vector"],
+                                "retrieval_channel_ranks": {"vector": 1},
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    output_csv = tmp_path / "review.csv"
+    manifest_path = tmp_path / "manifest.json"
+    instructions_path = tmp_path / "README.md"
+    kwargs = {
+        "retrieval_report": report_path,
+        "sources_root": sources_root,
+        "output_csv": output_csv,
+        "manifest_path": manifest_path,
+        "instructions_path": instructions_path,
+        "reviewer_id": "reviewer_1",
+        "retrieval_mode": "hybrid",
+        "chunk_size": 700,
+        "chunk_overlap": 80,
+        "seed": 7,
+    }
+
+    summary = prepare_review_pack(**kwargs)
+    with output_csv.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert summary["case_count"] == 1
+    assert summary["row_count"] == 1
+    assert rows[0]["relevance"] == ""
+    assert rows[0]["candidate_text"] == "Relevant evidence for the review candidate."
+    assert "source_path" not in rows[0]
+    assert "retrieval_rank" not in rows[0]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["rows"][0]["source_path"] == "sources/domain.md"
+    assert manifest["rows"][0]["retrieval_rank"] == 1
+    assert "只编辑 CSV" in instructions_path.read_text(encoding="utf-8")
+    with pytest.raises(FileExistsError, match="will not be overwritten"):
+        prepare_review_pack(**kwargs)
 
 
 def test_safety_redaction_and_budget_tools(tmp_path: Path) -> None:
