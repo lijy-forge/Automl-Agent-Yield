@@ -218,6 +218,9 @@ docs/
 *.docx
 *.xlsx
 
+# Reproducibly downloaded open literature; manifest and hashes stay tracked.
+knowledge_sources/literature/documents/
+
 # 上游项目主页静态资源（非本人代码，约 20MB）
 static/
 index.html

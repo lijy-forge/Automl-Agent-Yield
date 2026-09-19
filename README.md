@@ -90,6 +90,29 @@ queries and reports Recall@5, MRR, citation accuracy at one, and latency:
 /opt/anaconda3/envs/amla/bin/python scripts/check_yieldmind_embedding_capability.py
 ```
 
+The format-aware loader accepts Markdown, plain text, PDF, DOCX, and HTML.
+Markdown/DOCX/HTML headings and PDF page numbers are preserved in chunk
+metadata. Scanned PDFs are rejected with an explicit OCR requirement; complex
+tables, equations, and rotated figure text are not claimed as lossless. The SQL
+store is the retrieval source of truth, so an interrupted Chroma write cannot
+make an uncommitted chunk visible.
+
+An initial external-literature corpus is pinned by URL, DOI, license, and
+SHA-256 in `knowledge_sources/literature/manifest.json`. Reproduce and ingest it
+with:
+
+```bash
+/opt/anaconda3/envs/amla/bin/python scripts/download_yieldmind_literature.py
+/opt/anaconda3/envs/amla/bin/python scripts/ingest_yieldmind_corpora.py
+```
+
+The first manifest contains eight open documents (142 PDF pages). Project rules
+use `700/80` character chunks while full papers use `1800/180`; each setting is
+part of the split version. `project` and `literature` are filterable corpora,
+and literature search results carry title, URL, DOI, license, and page fields.
+The corpus is evidence to cite and review, not a labeled retrieval benchmark or
+domain ground truth.
+
 An optional sentence-transformers profile refuses model downloads unless
 `--allow-model-download` is supplied. Model ID, revision, dimension,
 normalization, metric, instructions, and index version are part of the profile;
@@ -124,7 +147,7 @@ access remain in the main application:
 bash scripts/setup_yieldmind_qwen3_env.sh
 YIELDMIND_EMBEDDING_TOKEN=local-only-token \
   .venv-qwen3/bin/python scripts/run_yieldmind_embedding_server.py \
-  --hf-home agent_workspace/yieldmind/hf_cache --port 8091
+  --hf-home agent_workspace/yieldmind/hf_cache --port 8091 --max-batch-size 16
 
 YIELDMIND_EMBEDDING_TOKEN=local-only-token \
   /opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_retrieval_eval.py \
@@ -133,6 +156,9 @@ YIELDMIND_EMBEDDING_TOKEN=local-only-token \
 
 The preset pins the model to an immutable Hugging Face commit. Add
 `--allow-model-download` to the server only for the initial controlled download.
+The application client defaults to batches of eight
+(`YIELDMIND_EMBEDDING_BATCH_SIZE=8`); larger batches are not assumed to be
+faster and consume substantially more memory on the current CPU host.
 On the current CPU-only host, the 30-query real-inference run produced the
 following results (Recall@5 / MRR / citation accuracy@1 / mean query latency):
 

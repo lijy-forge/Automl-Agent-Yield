@@ -185,6 +185,7 @@ def initialize_db(db_path: str | Path | None = None) -> Path:
         for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
             conn.executescript(migration.read_text(encoding="utf-8"))
         _ensure_optional_columns(conn)
+        _ensure_knowledge_optional_columns(conn)
         _ensure_memory_optional_columns(conn)
         _ensure_task_optional_columns(conn)
     return path
@@ -223,6 +224,34 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS uq_yieldmind_tool_calls_idempotency
         ON yieldmind_tool_calls(idempotency_key)
         WHERE idempotency_key <> ''
+        """
+    )
+
+
+def _ensure_knowledge_optional_columns(conn: sqlite3.Connection) -> None:
+    """Preserve citation provenance when older SQLite knowledge stores are upgraded."""
+    table_additions = {
+        "yieldmind_documents": {
+            "corpus": "TEXT NOT NULL DEFAULT 'project'",
+            "source_url": "TEXT NOT NULL DEFAULT ''",
+            "doi": "TEXT NOT NULL DEFAULT ''",
+            "license": "TEXT NOT NULL DEFAULT ''",
+            "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+        },
+        "yieldmind_document_chunks": {
+            "page_start": "INTEGER",
+            "page_end": "INTEGER",
+        },
+    }
+    for table, additions in table_additions.items():
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, ddl in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_yieldmind_documents_corpus
+        ON yieldmind_documents(index_version, corpus, status)
         """
     )
 

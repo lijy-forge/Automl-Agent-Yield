@@ -12,6 +12,8 @@ langgraph-checkpoint-postgres==2.0.25
 psycopg-pool==3.3.1
 requests==2.32.2
 beautifulsoup4==4.12.3
+pypdf==6.18.1
+python-docx==1.2.0
 google_search_results==2.4.2
 kaggle==1.6.12
 validators==0.28.0
