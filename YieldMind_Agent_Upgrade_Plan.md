@@ -472,6 +472,31 @@
   - SQLite旧库增量初始化后实查全8个新字段存在；候选/确认记忆可见性、workspace/session隔离、摘要溯源和Tool关联测试通过。
   - 本地PostgreSQL真实从`0004`升级到`0005`，revision、字段和`idx_yieldmind_memories_context`实查通过；真实CAS冲突及候选/确认准入smoke通过，临时数据已清理，PostgreSQL已停止。
 
+### 阶段 25：多格式领域文献库与可追溯入库
+
+- 状态：已完成多格式解析、可复现下载、来源元数据、语料隔离、批量限流、真实Qwen入库及幂等复验；文献查询人工标注尚未开始。
+- 前提核查：
+  - 原7篇项目文档仅约11KB/20个chunk，150行盲审候选来自20个唯一chunk，平均复用7.5次；“语料太少导致高复用”成立，但pairwise词法相似度均值仅`0.147`，不能简化为“分块重叠导致所有片段高度相似”。
+  - 只依据PDF URL成功不能证明论文主题正确；已发现并排除一篇URL可下载但内容是石墨烯锂扩散的无关论文。
+  - 文献库是可引用证据，不是自动成为真值标签；在没有外部文献查询标注前，不报文献检索Recall/MRR。
+- 实现：
+  - 新增Markdown/TXT/PDF/DOCX/HTML格式感知加载；保留标题层级、PDF页码，去除多页重复页眉/页脚，空扫描PDF明确报告需要OCR。
+  - 新增8篇开放文献的manifest和受控下载器；固定HTTPS地址、DOI、许可、SHA-256和100MiB上限，拒绝私有地址、格式伪装及哈希变化。
+  - PostgreSQL/SQLite增加`corpus/source_url/doi/license/metadata_json/page_start/page_end`，Alembic迁移为`0006/0007`；Chroma与SQL检索都支持`project/literature`隔离。
+  - 项目文档保持`700/80`，142页文献使用`1800/180`，避免将长论文碎成过多短片段；分块参数及解析语义纳入`split_version v3`。
+  - Qwen HTTP客户默认每批8条，服务端硬上限16条。旧实现一次发送30--75条时峰值约11.4GB；批8实测约5.76GiB，批16约7.0GiB且单条更慢，因此不默认16。
+  - SQL是检索事实源；向量命中必须对应SQL中`available`的chunk，旧向量只在新SQL chunk提交后删除，避免跨存储中断暴露未提交内容。
+- 已完成验证：
+  - 8个PDF的SHA-256全部匹配，共142页；`pypdf`layout提取约44.4万字符，无整页空白，产生326个文献chunk；7篇项目文档产生39个chunk。
+  - hashing配置对真实PostgreSQL+Chroma完成7+8篇入库，再次运行`document_encode_calls=0`；两个corpus隔离、文献DOI/URL/页码完整性检查均通过，`real_llm_calls=0`。
+  - Qwen索引现实存在7篇项目文档/39 chunks和8篇文献/326 chunks；本次增量补全在新服务进程中真实编码210条文本（其中208个文档chunk、2条验收查询），CPU服务进程峰值RSS=`6,186,856,448 bytes`（约5.76GiB）。
+  - Qwen幂等复跑返回`ok=true`、`document_encode_calls=0`、`http_encode_calls=2`（仅两条验收query）；项目/文献corpus隔离及文献DOI/URL/页码完整性均为true，`real_llm_calls=0`、`simulated_model_calls=0`。
+  - 首次离线全回归为`36/37`：SQLite评测库与PostgreSQL入库共用Chroma目录，SQL事实源正确拒绝了异库向量，但固定候选深度被无效向量占满。修复为离线评测使用临时独立Chroma，核心检索在遇到未提交/异库向量时自适应扩大候选；复跑恢复`37/37`。
+  - 格式解析、来源身份、语料过滤、下载安全、HTTP批处理及跨存储中断隔离均有自动化回归。
+- 已知边界：
+  - 未做OCR，无法保证复杂表格、公式、旋转图注的无损提取；检索证据仍需回到DOI/页码核对。
+  - 8篇文献只是初始语料，覆盖水泥、浆体、高固相膏与yielding liquids，不代表完整领域分布；发表年份和开放获取条件也会引入选择偏差。
+
 ## 本轮验证结果
 
 验证环境：`/opt/anaconda3/envs/amla/bin/python`
@@ -480,7 +505,7 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 首轮为`1 failed, 67 passed`，失败项是未改动的子进程PID文件时序测试；单独复跑通过，全量复跑通过`68 passed, 74 warnings`。新增有界Agent Loop、Memory准入/隔离/并发版本和Tool会话关联测试；warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 最终全量复跑`85 passed, 159 warnings`；新增多格式解析、下载安全、来源溯源、语料隔离、embedding分批和跨存储孤儿向量隔离测试。warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |
@@ -488,6 +513,7 @@
 | `python scripts/run_yieldmind_qwen_api_smoke.py --embedding-endpoint http://127.0.0.1:8091` | 通过，FastAPI readiness、Qwen入库、直接搜索和Tool搜索9项检查全true；真实9次encode/22条文本，`real_llm_calls=0` |
 | `python scripts/check_yieldmind_qwen_api_http.py --api-base-url http://127.0.0.1:8072 --embedding-endpoint http://127.0.0.1:8091` | 通过，独立Uvicorn/TCP正常场景13/13及Qwen不可达场景7/7检查通过；正向真实9次encode/22条文本，反向readiness=503，`real_llm_calls=0` |
 | `python scripts/check_yieldmind_embedding_capability.py` | 通过；离线确认Qwen3/BGE-M3均未达到本机零变更运行条件，`network_calls=0`、`model_downloads=0`、`model_inference_calls=0` |
+| `python scripts/ingest_yieldmind_corpora.py`（Qwen3 profile） | 通过；PostgreSQL+Chroma实存7篇项目文档/39 chunks和8篇文献/326 chunks，幂等复跑`document_encode_calls=0`、两次query embedding，语料隔离和DOI/URL/页码检查均通过，`real_llm_calls=0` |
 | `python scripts/run_yieldmind_function_calling_smoke.py` | 通过，生成 skipped 报告；`real_llm_calls=0`，未调用真实模型 |
 | `python scripts/run_yieldmind_workflow.py --n-samples 40 --n-splits 2` | 通过，`status=passed`、`workflow_backend=langgraph_stategraph`、`langgraph_available=true` |
 | `pip check` | 通过，`No broken requirements found` |

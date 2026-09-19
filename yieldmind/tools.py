@@ -18,6 +18,7 @@ from yieldmind.knowledge_base import (
     KnowledgeBase,
     KnowledgeIngestRequest,
     KnowledgeSearchRequest,
+    KnowledgeSourceMetadata,
 )
 from yieldmind.sandbox import (
     PROJECT_ROOT,
@@ -164,6 +165,7 @@ class IngestKnowledgeArgs(BaseModel):
     index_version: str = "yieldmind-chroma-hashing-v1"
     chunk_size: int = Field(default=1200, ge=200, le=4000)
     chunk_overlap: int = Field(default=180, ge=0, le=1000)
+    source_metadata: dict[str, KnowledgeSourceMetadata] = Field(default_factory=dict)
 
 
 class SearchKnowledgeArgs(BaseModel):
@@ -171,6 +173,7 @@ class SearchKnowledgeArgs(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     index_version: str = "yieldmind-chroma-hashing-v1"
     document_id: str | None = None
+    corpus: Literal["project", "literature"] | None = None
     retrieval_mode: Literal["vector", "bm25", "hybrid"] = "hybrid"
 
 
@@ -504,6 +507,7 @@ class ToolRegistry:
                 index_version=parsed.index_version,
                 chunk_size=parsed.chunk_size,
                 chunk_overlap=parsed.chunk_overlap,
+                source_metadata=parsed.source_metadata,
             )
         )
         failed = [item for item in result.get("documents", []) if item.get("status") == "failed"]
@@ -522,6 +526,7 @@ class ToolRegistry:
                 top_k=parsed.top_k,
                 index_version=parsed.index_version,
                 document_id=parsed.document_id,
+                corpus=parsed.corpus,
                 retrieval_mode=parsed.retrieval_mode,
             )
         )

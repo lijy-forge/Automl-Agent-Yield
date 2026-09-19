@@ -1,0 +1,93 @@
+{
+  "manifest_version": "1",
+  "documents": [
+    {
+      "source_id": "nist_concrete_rheology_1999",
+      "title": "Measurement of the Rheological Properties of High Performance Concrete: State of the Art Report",
+      "filename": "nist_concrete_rheology_1999.pdf",
+      "download_url": "https://nvlpubs.nist.gov/nistpubs/jres/104/5/j45fer.pdf",
+      "source_url": "https://www.nist.gov/publications/measurement-rheological-properties-high-performance-concrete-state-art-report",
+      "doi": "10.6028/jres.104.028",
+      "license": "NIST Technical Series terms; U.S. Government work, public domain in the United States",
+      "topics": ["measurement", "bingham", "yield_stress", "cement", "rheometer"],
+      "expected_sha256": "d34f35ab216bbe745743604f4ca94fd549360600abdc73506656d5f961c11d49"
+    },
+    {
+      "source_id": "saos_yodel_breakpro_2020",
+      "title": "Modeling SAOS Yield Stress of Cement Suspensions: Microstructure-Based Computational Approach",
+      "filename": "saos_yodel_breakpro_2020.pdf",
+      "download_url": "https://mdpi-res.com/d_attachment/materials/materials-13-02769/article_deploy/materials-13-02769-v2.pdf",
+      "source_url": "https://www.mdpi.com/1996-1944/13/12/2769",
+      "doi": "10.3390/ma13122769",
+      "license": "CC-BY-4.0",
+      "topics": ["yodel", "breakpro", "saos", "cement", "microstructure"],
+      "expected_sha256": "fe13ba8e000149f1c48a6db809e48466ff2ee8f44aa1df1e32d42d38614759ba"
+    },
+    {
+      "source_id": "cement_microstructure_prediction_2022",
+      "title": "Prediction of the Rheological Properties of Fresh Cementitious Suspensions Considering Microstructural Parameters",
+      "filename": "cement_microstructure_prediction_2022.pdf",
+      "download_url": "https://mdpi-res.com/d_attachment/materials/materials-15-07044/article_deploy/materials-15-07044.pdf",
+      "source_url": "https://www.mdpi.com/1996-1944/15/20/7044",
+      "doi": "10.3390/ma15207044",
+      "license": "CC-BY-4.0",
+      "topics": ["yodel", "packing_fraction", "solid_volume_fraction", "cement", "prediction"],
+      "expected_sha256": "23b649a53cf30fb90b14657b09fb1fe8423c40e8d7062d372adefca152f3e388"
+    },
+    {
+      "source_id": "thixotropic_engineering_slurry_2022",
+      "title": "Rheological Characterization and Accumulation Tests for Strong Thixotropic Engineering Slurry",
+      "filename": "thixotropic_engineering_slurry_2022.pdf",
+      "download_url": "https://mdpi-res.com/d_attachment/materials/materials-15-06891/article_deploy/materials-15-06891.pdf",
+      "source_url": "https://www.mdpi.com/1996-1944/15/19/6891",
+      "doi": "10.3390/ma15196891",
+      "license": "CC-BY-4.0",
+      "topics": ["thixotropy", "structural_recovery", "yield_stress", "slurry", "measurement"],
+      "expected_sha256": "80b8ab54a8f0ddb5ba7c87d5739cdf8beb8995c0a545e297cd3d2b3fa902ddb4"
+    },
+    {
+      "source_id": "vane_microstructure_2020",
+      "title": "Effect of Different Shear Rates on Particle Microstructure of Cementitious Materials in a Wide Gap Vane-in-cup Rheometer",
+      "filename": "vane_microstructure_2020.pdf",
+      "download_url": "https://mdpi-res.com/d_attachment/materials/materials-13-02035/article_deploy/materials-13-02035.pdf",
+      "source_url": "https://www.mdpi.com/1996-1944/13/9/2035",
+      "doi": "10.3390/ma13092035",
+      "license": "CC-BY-4.0",
+      "topics": ["vane_rheometer", "shear_rate", "microstructure", "plug_flow", "cement"],
+      "expected_sha256": "1a9244119eb1f0731392eb8484bd55664183403a45063f68a25cdfadc57987a2"
+    },
+    {
+      "source_id": "composition_constitutive_model_2025",
+      "title": "Constitutive Modeling of Rheological Behavior of Cement Paste Based on Material Composition",
+      "filename": "composition_constitutive_model_2025.pdf",
+      "download_url": "https://mdpi-res.com/d_attachment/materials/materials-18-02983/article_deploy/materials-18-02983.pdf",
+      "source_url": "https://www.mdpi.com/1996-1944/18/13/2983",
+      "doi": "10.3390/ma18132983",
+      "license": "CC-BY-4.0",
+      "topics": ["material_composition", "maximum_packing", "superplasticizer", "yield_stress", "viscosity"],
+      "expected_sha256": "c7b0e50ed3f4ca89b1f8689534d1956d1988f6aa9f4a5283aa11e877737c64bf"
+    },
+    {
+      "source_id": "silver_paste_printing_2018",
+      "title": "Rheology and Screen-Printing Performance of Model Silver Pastes for Metallization of Si-Solar Cells",
+      "filename": "silver_paste_printing_2018.pdf",
+      "download_url": "https://mdpi-res.com/d_attachment/coatings/coatings-08-00406/article_deploy/coatings-08-00406.pdf",
+      "source_url": "https://www.mdpi.com/2079-6412/8/11/406",
+      "doi": "10.3390/coatings8110406",
+      "license": "CC-BY-4.0",
+      "topics": ["high_solid_paste", "wall_slip", "thixotropy", "printing", "measurement"],
+      "expected_sha256": "dca5656d97f38ed449c2e585962aa86d190b8186cfe262dbd9507fcec8528127"
+    },
+    {
+      "source_id": "yielding_liquids_review_2023",
+      "title": "Rheology of Gels and Yielding Liquids",
+      "filename": "yielding_liquids_review_2023.pdf",
+      "download_url": "https://mdpi-res.com/d_attachment/gels/gels-09-00715/article_deploy/gels-09-00715.pdf",
+      "source_url": "https://www.mdpi.com/2310-2861/9/9/715",
+      "doi": "10.3390/gels9090715",
+      "license": "CC-BY-4.0",
+      "topics": ["yield_stress", "yielding_liquid", "thixotropy", "measurement", "review"],
+      "expected_sha256": "237d673bdc190d6b6866eab16854325f574b7945c5c0d334bce625bff60d7bf9"
+    }
+  ]
+}

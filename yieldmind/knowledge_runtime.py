@@ -22,6 +22,7 @@ class KnowledgeRuntimeConfig(BaseModel):
     embedding_endpoint: str = ""
     embedding_token_env: str = "YIELDMIND_EMBEDDING_TOKEN"
     embedding_timeout_seconds: float = Field(default=300.0, gt=0.0, le=900.0)
+    embedding_batch_size: int = Field(default=8, ge=1, le=64)
     chroma_dir: str = str(DEFAULT_CHROMA_DIR)
     collection_name: str = DEFAULT_COLLECTION
 
@@ -38,6 +39,7 @@ class KnowledgeRuntimeConfig(BaseModel):
             embedding_endpoint=os.environ.get("YIELDMIND_EMBEDDING_ENDPOINT", ""),
             embedding_token_env=os.environ.get("YIELDMIND_EMBEDDING_TOKEN_ENV", "YIELDMIND_EMBEDDING_TOKEN"),
             embedding_timeout_seconds=float(os.environ.get("YIELDMIND_EMBEDDING_TIMEOUT_SECONDS", "300")),
+            embedding_batch_size=int(os.environ.get("YIELDMIND_EMBEDDING_BATCH_SIZE", "8")),
             chroma_dir=os.environ.get("YIELDMIND_CHROMA_DIR", str(DEFAULT_CHROMA_DIR)),
             collection_name=os.environ.get("YIELDMIND_CHROMA_COLLECTION", DEFAULT_COLLECTION),
         )
@@ -49,6 +51,7 @@ class KnowledgeRuntimeConfig(BaseModel):
             "embedding_endpoint_configured": bool(self.embedding_endpoint),
             "embedding_token_configured": bool(os.environ.get(self.embedding_token_env, "")),
             "embedding_timeout_seconds": self.embedding_timeout_seconds,
+            "embedding_batch_size": self.embedding_batch_size,
             "chroma_dir_configured": bool(self.chroma_dir),
             "collection_name": self.collection_name,
             "embedding_profile": profile.model_dump(mode="json") if profile else None,
@@ -73,6 +76,7 @@ def configured_knowledge_base(
         endpoint=runtime.embedding_endpoint,
         token=os.environ.get(runtime.embedding_token_env, ""),
         timeout_seconds=runtime.embedding_timeout_seconds,
+        batch_size=runtime.embedding_batch_size,
     )
     return KnowledgeBase(
         store=store,
@@ -95,6 +99,7 @@ def knowledge_runtime_health() -> dict[str, Any]:
             endpoint=config.embedding_endpoint,
             token=os.environ.get(config.embedding_token_env, ""),
             timeout_seconds=min(config.embedding_timeout_seconds, 10.0),
+            batch_size=config.embedding_batch_size,
         )
         service = embedding.health()
         return {

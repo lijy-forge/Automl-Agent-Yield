@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from yieldmind.database import YieldMindStore, json_dumps
@@ -202,18 +203,21 @@ def run_offline_evaluation(
     )
 
     knowledge_started = time.time()
-    kb = KnowledgeBase(store=store)
-    ingest_result = kb.ingest(KnowledgeIngestRequest(paths=[str(SEED_KNOWLEDGE_PATH)]))
-    search_result = kb.search(KnowledgeSearchRequest(query="YODEL packing yield stress phi_m", top_k=3))
-    retrieval_cases = dataset.get("retrieval_cases") or [
-        {"query": "YODEL maximum packing density yield stress", "expected_terms": ["yodel", "packing"]},
-        {"query": "mechanism ablation evidence chunk", "expected_terms": ["mechanism", "ablation"]},
-    ]
-    retrieval_eval = evaluate_retrieval(
-        kb,
-        retrieval_cases,
-        top_k=3,
-    )
+    eval_chroma_parent = PROJECT_ROOT / "agent_workspace" / "yieldmind" / "eval_chroma_tmp"
+    eval_chroma_parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="run_", dir=eval_chroma_parent) as eval_chroma_dir:
+        kb = KnowledgeBase(store=store, chroma_dir=eval_chroma_dir, collection_name="yieldmind_offline_eval")
+        ingest_result = kb.ingest(KnowledgeIngestRequest(paths=[str(SEED_KNOWLEDGE_PATH)]))
+        search_result = kb.search(KnowledgeSearchRequest(query="YODEL packing yield stress phi_m", top_k=3))
+        retrieval_cases = dataset.get("retrieval_cases") or [
+            {"query": "YODEL maximum packing density yield stress", "expected_terms": ["yodel", "packing"]},
+            {"query": "mechanism ablation evidence chunk", "expected_terms": ["mechanism", "ablation"]},
+        ]
+        retrieval_eval = evaluate_retrieval(
+            kb,
+            retrieval_cases,
+            top_k=3,
+        )
     retrieval_passed = sum(1 for item in retrieval_eval.get("cases", []) if item.get("passed"))
     knowledge_smoke_passed = bool(search_result.get("hits"))
     knowledge_row = {

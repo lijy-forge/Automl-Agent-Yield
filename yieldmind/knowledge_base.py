@@ -24,6 +24,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import BaseModel, Field, model_validator
 
 from yieldmind.database import PROJECT_ROOT, YieldMindStore, connect, json_dumps, json_loads
+from yieldmind.document_loader import load_document
 
 
 DEFAULT_INDEX_VERSION = "yieldmind-chroma-hashing-v1"
@@ -36,14 +37,13 @@ QWEN3_QUERY_INSTRUCTION = (
     "Instruct: Given a query about yield-stress modeling and the YieldMind system, "
     "retrieve relevant passages that answer the query\nQuery:"
 )
-SUPPORTED_SUFFIXES = {".md", ".txt"}
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 LATIN_TOKEN_RE = re.compile(r"[a-z0-9_]+", re.IGNORECASE)
 CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 
 
 def split_version_for(chunk_size: int, chunk_overlap: int) -> str:
-    return f"recursive_chars_{int(chunk_size)}_{int(chunk_overlap)}_v1"
+    return f"format_aware_recursive_chars_{int(chunk_size)}_{int(chunk_overlap)}_v3"
 
 
 SPLIT_VERSION = split_version_for(1200, 180)
@@ -104,11 +104,35 @@ def qwen3_embedding_profile(*, http: bool = True) -> EmbeddingProfile:
     )
 
 
+class KnowledgeSourceMetadata(BaseModel):
+    corpus: Literal["project", "literature"] = "project"
+    title: str = ""
+    source_url: str = ""
+    doi: str = ""
+    license: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def normalize_provenance(self) -> "KnowledgeSourceMetadata":
+        self.title = self.title.strip()
+        self.source_url = self.source_url.strip()
+        self.doi = self.doi.strip().removeprefix("https://doi.org/").removeprefix("http://doi.org/")
+        self.license = self.license.strip()
+        return self
+
+
 class KnowledgeIngestRequest(BaseModel):
     paths: list[str] = Field(..., min_length=1)
     index_version: str = DEFAULT_INDEX_VERSION
     chunk_size: int = Field(default=1200, ge=200, le=4000)
     chunk_overlap: int = Field(default=180, ge=0, le=1000)
+    source_metadata: dict[str, KnowledgeSourceMetadata] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_chunk_overlap(self) -> "KnowledgeIngestRequest":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
+        return self
 
 
 class KnowledgeSearchRequest(BaseModel):
@@ -116,16 +140,13 @@ class KnowledgeSearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     index_version: str = DEFAULT_INDEX_VERSION
     document_id: str | None = None
+    corpus: Literal["project", "literature"] | None = None
     retrieval_mode: Literal["vector", "bm25", "hybrid"] = "vector"
 
 
 class KnowledgeDeleteRequest(BaseModel):
     document_id: str
     index_version: str = DEFAULT_INDEX_VERSION
-
-
-def _sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def _sha256_text(text: str) -> str:
@@ -137,24 +158,17 @@ def _stable_id(*parts: Any, prefix: str = "") -> str:
     return f"{prefix}{digest}" if prefix else digest
 
 
-def _chroma_where(index_version: str, document_id: str | None = None) -> dict[str, Any]:
+def _chroma_where(
+    index_version: str,
+    document_id: str | None = None,
+    corpus: str | None = None,
+) -> dict[str, Any]:
     clauses = [{"index_version": index_version}]
     if document_id:
         clauses.append({"document_id": document_id})
+    if corpus:
+        clauses.append({"corpus": corpus})
     return clauses[0] if len(clauses) == 1 else {"$and": clauses}
-
-
-def _read_text_file(path: Path) -> tuple[str, str]:
-    suffix = path.suffix.lower()
-    if suffix not in SUPPORTED_SUFFIXES:
-        raise ValueError(f"Unsupported document type {suffix!r}; supported: {sorted(SUPPORTED_SUFFIXES)}")
-    data = path.read_bytes()
-    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
-        try:
-            return data.decode(encoding), _sha256_bytes(data)
-        except UnicodeDecodeError:
-            continue
-    raise ValueError(f"Could not decode document with utf-8/gb18030/gbk: {path}")
 
 
 class EmbeddingFunction(Protocol):
@@ -265,6 +279,7 @@ class HttpEmbeddingFunction:
         endpoint: str,
         token: str = "",
         timeout_seconds: float = 300.0,
+        batch_size: int = 8,
     ) -> None:
         if profile.provider != "http_sentence_transformers":
             raise ValueError("HttpEmbeddingFunction requires provider='http_sentence_transformers'.")
@@ -276,9 +291,13 @@ class HttpEmbeddingFunction:
             raise ValueError("Embedding endpoint must use HTTP on a loopback host.")
         self.token = token
         self.timeout_seconds = timeout_seconds
+        if batch_size < 1 or batch_size > 64:
+            raise ValueError("Embedding batch_size must be between 1 and 64.")
+        self.batch_size = int(batch_size)
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.document_encode_calls = 0
         self.query_encode_calls = 0
+        self.http_encode_calls = 0
         health = self._request("GET", "/health")
         expected = {
             "model_id": profile.model_id,
@@ -309,12 +328,19 @@ class HttpEmbeddingFunction:
 
     def _encode(self, texts: list[str], *, instruction: str, kind: str) -> list[list[float]]:
         prepared = [f"{instruction}{text}" if instruction else text for text in texts]
-        response = self._request("POST", "/embed", {"texts": prepared, "kind": kind})
-        vectors = response.get("vectors")
-        if not isinstance(vectors, list) or len(vectors) != len(texts):
-            raise RuntimeError("Embedding service returned an invalid vector batch.")
-        if any(not isinstance(vector, list) or len(vector) != self.dimensions for vector in vectors):
-            raise RuntimeError(f"Embedding service returned a vector with dimension other than {self.dimensions}.")
+        vectors: list[list[float]] = []
+        for start in range(0, len(prepared), self.batch_size):
+            batch = prepared[start : start + self.batch_size]
+            response = self._request("POST", "/embed", {"texts": batch, "kind": kind})
+            self.http_encode_calls += 1
+            batch_vectors = response.get("vectors")
+            if not isinstance(batch_vectors, list) or len(batch_vectors) != len(batch):
+                raise RuntimeError("Embedding service returned an invalid vector batch.")
+            if any(not isinstance(vector, list) or len(vector) != self.dimensions for vector in batch_vectors):
+                raise RuntimeError(
+                    f"Embedding service returned a vector with dimension other than {self.dimensions}."
+                )
+            vectors.extend(batch_vectors)
         return vectors
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -411,6 +437,30 @@ class KnowledgeBase:
     def _split(self, text: str, *, chunk_size: int, chunk_overlap: int) -> list[str]:
         return split_knowledge_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
+    @staticmethod
+    def _metadata_for_path(
+        request: KnowledgeIngestRequest,
+        raw_path: str,
+        resolved_path: Path,
+    ) -> KnowledgeSourceMetadata:
+        for key in (raw_path, str(resolved_path), resolved_path.name):
+            metadata = request.source_metadata.get(key)
+            if metadata is not None:
+                return metadata
+        return KnowledgeSourceMetadata()
+
+    def _document_by_source_path(self, source_path: str, index_version: str) -> dict[str, Any] | None:
+        with connect(self.store.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM yieldmind_documents
+                WHERE source_path=? AND index_version=?
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (source_path, index_version),
+            ).fetchone()
+        return dict(row) if row else None
+
     def ingest(self, request: KnowledgeIngestRequest) -> dict[str, Any]:
         self._validate_index_version(request.index_version)
         collection = self._collection()
@@ -423,11 +473,23 @@ class KnowledgeBase:
                 results.append({"source_path": str(path), "status": "failed", "error": "path does not exist"})
                 continue
             try:
-                text, document_hash = _read_text_file(path)
-                title = path.stem
+                source_metadata = self._metadata_for_path(request, raw_path, path)
+                loaded = load_document(path, title=source_metadata.title)
+                document_hash = loaded.document_hash
+                title = loaded.title
                 document_version = document_hash[:16]
-                document_id = _stable_id(str(path), document_hash, request.index_version, prefix="doc_")
+                if source_metadata.doi:
+                    source_identity = f"doi:{source_metadata.doi.lower()}"
+                elif source_metadata.source_url:
+                    source_identity = f"url:{source_metadata.source_url}"
+                else:
+                    source_identity = f"path:{path}"
+                document_id = _stable_id(source_identity, request.index_version, prefix="doc_")
                 existing = self.get_document(document_id)
+                if existing is None:
+                    existing = self._document_by_source_path(str(path), request.index_version)
+                    if existing is not None:
+                        document_id = str(existing["document_id"])
                 stored_ids: list[str] = []
                 stored_split_versions: set[str] = set()
                 if existing and existing.get("status") == "available":
@@ -441,17 +503,54 @@ class KnowledgeBase:
                         for metadata in (stored.get("metadatas") or [])
                     }
                 split_is_current = bool(stored_ids) and stored_split_versions == {split_version}
-                if existing and existing.get("status") == "available" and split_is_current:
-                    results.append({**existing, "status": "available", "idempotent": True})
+                content_is_current = bool(existing) and existing.get("document_hash") == document_hash
+                metadata_is_current = bool(existing) and all(
+                    str(existing.get(key) or "") == value
+                    for key, value in {
+                        "title": title,
+                        "source_path": str(path),
+                        "source_type": loaded.source_type,
+                        "corpus": source_metadata.corpus,
+                        "source_url": source_metadata.source_url,
+                        "doi": source_metadata.doi,
+                        "license": source_metadata.license,
+                        "metadata_json": json_dumps(source_metadata.metadata),
+                    }.items()
+                )
+                if (
+                    existing
+                    and existing.get("status") == "available"
+                    and split_is_current
+                    and content_is_current
+                    and metadata_is_current
+                ):
+                    results.append(
+                        {
+                            **existing,
+                            "status": "available",
+                            "warnings": loaded.warnings,
+                            "idempotent": True,
+                        }
+                    )
                     continue
 
-                chunks = self._split(text, chunk_size=request.chunk_size, chunk_overlap=request.chunk_overlap)
+                chunks: list[tuple[str, str, int | None, int | None]] = []
+                for section in loaded.sections:
+                    section_chunks = self._split(
+                        section.text,
+                        chunk_size=request.chunk_size,
+                        chunk_overlap=request.chunk_overlap,
+                    )
+                    chunks.extend(
+                        (chunk, section.section, section.page_start, section.page_end)
+                        for chunk in section_chunks
+                    )
                 now = time.time()
                 ids: list[str] = []
                 documents: list[str] = []
                 metadatas: list[dict[str, Any]] = []
                 db_rows: list[tuple[Any, ...]] = []
-                for idx, chunk in enumerate(chunks):
+                for idx, (chunk, section, page_start, page_end) in enumerate(chunks):
                     text_hash = _sha256_text(chunk)
                     chunk_id = _stable_id(document_id, document_version, split_version, idx, text_hash, prefix="chk_")
                     ids.append(chunk_id)
@@ -463,10 +562,20 @@ class KnowledgeBase:
                         "chunk_index": idx,
                         "title": title,
                         "source_path": str(path),
+                        "source_type": loaded.source_type,
+                        "corpus": source_metadata.corpus,
+                        "source_url": source_metadata.source_url,
+                        "doi": source_metadata.doi,
+                        "license": source_metadata.license,
+                        "section": section,
                         "text_hash": text_hash,
                         "index_version": request.index_version,
                         "split_version": split_version,
                     }
+                    if page_start is not None:
+                        metadata["page_start"] = page_start
+                    if page_end is not None:
+                        metadata["page_end"] = page_end
                     metadatas.append(metadata)
                     db_rows.append(
                         (
@@ -476,7 +585,9 @@ class KnowledgeBase:
                             idx,
                             title,
                             str(path),
-                            "",
+                            section,
+                            page_start,
+                            page_end,
                             text_hash,
                             request.index_version,
                             chunk,
@@ -488,20 +599,23 @@ class KnowledgeBase:
                 if ids:
                     collection.upsert(ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings)
                 stale_ids = sorted(set(stored_ids).difference(ids))
-                if stale_ids:
-                    collection.delete(ids=stale_ids)
                 with connect(self.store.db_path) as conn:
                     conn.execute(
                         """
                         INSERT INTO yieldmind_documents
-                            (document_id, title, source_path, source_type, document_hash,
-                             document_version, status, index_version, chunk_count, error,
-                             created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            (document_id, title, source_path, source_type, corpus, source_url,
+                             doi, license, metadata_json, document_hash, document_version,
+                             status, index_version, chunk_count, error, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(document_id) DO UPDATE SET
                             title=excluded.title,
                             source_path=excluded.source_path,
                             source_type=excluded.source_type,
+                            corpus=excluded.corpus,
+                            source_url=excluded.source_url,
+                            doi=excluded.doi,
+                            license=excluded.license,
+                            metadata_json=excluded.metadata_json,
                             document_hash=excluded.document_hash,
                             document_version=excluded.document_version,
                             status=excluded.status,
@@ -514,7 +628,12 @@ class KnowledgeBase:
                             document_id,
                             title,
                             str(path),
-                            path.suffix.lower().lstrip("."),
+                            loaded.source_type,
+                            source_metadata.corpus,
+                            source_metadata.source_url,
+                            source_metadata.doi,
+                            source_metadata.license,
+                            json_dumps(source_metadata.metadata),
                             document_hash,
                             document_version,
                             "available",
@@ -530,8 +649,9 @@ class KnowledgeBase:
                         """
                         INSERT INTO yieldmind_document_chunks
                             (chunk_id, document_id, document_version, chunk_index, title,
-                             source_path, section, text_hash, index_version, text, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             source_path, section, page_start, page_end, text_hash,
+                             index_version, text, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(chunk_id) DO UPDATE SET
                             document_id=excluded.document_id,
                             document_version=excluded.document_version,
@@ -539,6 +659,8 @@ class KnowledgeBase:
                             title=excluded.title,
                             source_path=excluded.source_path,
                             section=excluded.section,
+                            page_start=excluded.page_start,
+                            page_end=excluded.page_end,
                             text_hash=excluded.text_hash,
                             index_version=excluded.index_version,
                             text=excluded.text,
@@ -546,6 +668,10 @@ class KnowledgeBase:
                         """,
                         db_rows,
                     )
+                # PostgreSQL/SQLite is the retrieval source of truth. Delete old
+                # vectors only after the replacement chunk rows have committed.
+                if stale_ids:
+                    collection.delete(ids=stale_ids)
                 results.append(
                     IngestedDocument(
                         document_id=document_id,
@@ -557,7 +683,16 @@ class KnowledgeBase:
                         chunk_count=len(chunks),
                         status="available",
                     ).__dict__
-                    | {"duration_seconds": round(time.time() - started, 4), "idempotent": False}
+                    | {
+                        "source_type": loaded.source_type,
+                        "corpus": source_metadata.corpus,
+                        "source_url": source_metadata.source_url,
+                        "doi": source_metadata.doi,
+                        "license": source_metadata.license,
+                        "warnings": loaded.warnings,
+                        "duration_seconds": round(time.time() - started, 4),
+                        "idempotent": False,
+                    }
                 )
             except Exception as exc:
                 results.append({"source_path": str(path), "status": "failed", "error": f"{type(exc).__name__}: {exc}"})
@@ -584,7 +719,12 @@ class KnowledgeBase:
                 "SELECT * FROM yieldmind_documents ORDER BY updated_at DESC LIMIT ?",
                 (max(1, min(int(limit), 500)),),
             ).fetchall()
-        return [dict(row) for row in rows]
+        documents = []
+        for row in rows:
+            document = dict(row)
+            document["metadata"] = json_loads(document.pop("metadata_json", "{}"))
+            documents.append(document)
+        return documents
 
     @staticmethod
     def _lexical_tokens(text: str) -> list[str]:
@@ -597,7 +737,8 @@ class KnowledgeBase:
 
     def _active_chunks(self, request: KnowledgeSearchRequest) -> list[dict[str, Any]]:
         sql = """
-            SELECT c.* FROM yieldmind_document_chunks c
+            SELECT c.*, d.source_type, d.corpus, d.source_url, d.doi, d.license
+            FROM yieldmind_document_chunks c
             JOIN yieldmind_documents d ON d.document_id=c.document_id
             WHERE c.index_version=? AND d.status='available'
         """
@@ -605,10 +746,39 @@ class KnowledgeBase:
         if request.document_id:
             sql += " AND c.document_id=?"
             params.append(request.document_id)
+        if request.corpus:
+            sql += " AND d.corpus=?"
+            params.append(request.corpus)
         sql += " ORDER BY c.document_id, c.chunk_index"
         with connect(self.store.db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
+
+    def _active_chunks_by_id(
+        self,
+        chunk_ids: list[str],
+        request: KnowledgeSearchRequest,
+    ) -> dict[str, dict[str, Any]]:
+        if not chunk_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in chunk_ids)
+        sql = f"""
+            SELECT c.*, d.source_type, d.corpus, d.source_url, d.doi, d.license
+            FROM yieldmind_document_chunks c
+            JOIN yieldmind_documents d ON d.document_id=c.document_id
+            WHERE c.chunk_id IN ({placeholders})
+              AND c.index_version=? AND d.status='available'
+        """
+        params: list[Any] = [*chunk_ids, request.index_version]
+        if request.document_id:
+            sql += " AND c.document_id=?"
+            params.append(request.document_id)
+        if request.corpus:
+            sql += " AND d.corpus=?"
+            params.append(request.corpus)
+        with connect(self.store.db_path) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return {str(row["chunk_id"]): dict(row) for row in rows}
 
     @staticmethod
     def _hit_from_metadata(
@@ -625,6 +795,14 @@ class KnowledgeBase:
             "document_version": metadata.get("document_version"),
             "title": metadata.get("title"),
             "source_path": metadata.get("source_path"),
+            "source_type": metadata.get("source_type"),
+            "corpus": metadata.get("corpus"),
+            "source_url": metadata.get("source_url"),
+            "doi": metadata.get("doi"),
+            "license": metadata.get("license"),
+            "section": metadata.get("section"),
+            "page_start": metadata.get("page_start"),
+            "page_end": metadata.get("page_end"),
             "chunk_index": metadata.get("chunk_index"),
             "text_hash": metadata.get("text_hash"),
             "index_version": metadata.get("index_version"),
@@ -635,35 +813,46 @@ class KnowledgeBase:
 
     def _vector_hits(self, request: KnowledgeSearchRequest, *, candidate_k: int) -> list[dict[str, Any]]:
         collection = self._collection()
-        where = _chroma_where(request.index_version, request.document_id)
+        where = _chroma_where(request.index_version, request.document_id, request.corpus)
         query_embedding = self.embedding.embed_query(request.query)
         try:
-            n_results = min(candidate_k, max(1, int(collection.count())))
+            collection_count = max(1, int(collection.count()))
         except Exception:
-            n_results = candidate_k
-        raw = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results,
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        )
-        hits = []
-        ids = (raw.get("ids") or [[]])[0]
-        docs = (raw.get("documents") or [[]])[0]
-        metas = (raw.get("metadatas") or [[]])[0]
-        distances = (raw.get("distances") or [[]])[0]
-        for chunk_id, text, meta, distance in zip(ids, docs, metas, distances):
-            score = 1.0 - float(distance) if distance is not None else None
-            hits.append(
-                self._hit_from_metadata(
-                    chunk_id=chunk_id,
-                    text=text,
-                    metadata=meta,
-                    score=score,
-                    distance=float(distance) if distance is not None else None,
-                )
+            collection_count = candidate_k * 3
+        # Interrupted writes or a mistakenly shared Chroma directory can leave
+        # vectors that are not active in this SQL store. Expand only when those
+        # rows starve the requested committed result count.
+        n_results = min(max(candidate_k * 3, candidate_k), collection_count)
+        while True:
+            raw = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                where=where,
+                include=["documents", "metadatas", "distances"],
             )
-        return hits
+            hits = []
+            ids = (raw.get("ids") or [[]])[0]
+            distances = (raw.get("distances") or [[]])[0]
+            active_chunks = self._active_chunks_by_id([str(chunk_id) for chunk_id in ids], request)
+            for chunk_id, distance in zip(ids, distances):
+                committed = active_chunks.get(str(chunk_id))
+                if committed is None:
+                    continue
+                score = 1.0 - float(distance) if distance is not None else None
+                hits.append(
+                    self._hit_from_metadata(
+                        chunk_id=chunk_id,
+                        text=str(committed["text"]),
+                        metadata=committed,
+                        score=score,
+                        distance=float(distance) if distance is not None else None,
+                    )
+                )
+                if len(hits) >= candidate_k:
+                    break
+            if len(hits) >= candidate_k or n_results >= collection_count:
+                return hits
+            n_results = min(collection_count, max(n_results + 1, n_results * 2))
 
     def _bm25_hits(self, request: KnowledgeSearchRequest, *, candidate_k: int) -> list[dict[str, Any]]:
         from rank_bm25 import BM25Plus

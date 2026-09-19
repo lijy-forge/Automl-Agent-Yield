@@ -1090,10 +1090,10 @@ def test_knowledge_ingest_and_search(tmp_path: Path) -> None:
     assert ingest["documents"][0]["status"] == "available"
     again = kb.ingest(KnowledgeIngestRequest(paths=[str(doc)], chunk_size=300, chunk_overlap=20))
     assert again["documents"][0]["idempotent"] is True
-    assert again["split_version"] == "recursive_chars_300_20_v1"
+    assert again["split_version"] == "format_aware_recursive_chars_300_20_v3"
     rechunked = kb.ingest(KnowledgeIngestRequest(paths=[str(doc)], chunk_size=350, chunk_overlap=20))
     assert rechunked["documents"][0]["idempotent"] is False
-    assert rechunked["split_version"] == "recursive_chars_350_20_v1"
+    assert rechunked["split_version"] == "format_aware_recursive_chars_350_20_v3"
     result = kb.search(KnowledgeSearchRequest(query="YODEL packing phi_m yield stress", top_k=2))
     assert result["hits"]
     assert result["hits"][0]["chunk_id"].startswith("chk_")
@@ -1195,6 +1195,64 @@ def test_http_embedding_client_bypasses_system_proxy(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("yieldmind.knowledge_base.urllib.request.build_opener", fake_build_opener)
     client = HttpEmbeddingFunction(profile, endpoint="http://127.0.0.1:8091", timeout_seconds=10.0)
     assert client.dimensions == 1024
+
+
+def test_http_embedding_client_splits_large_document_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = EmbeddingProfile(
+        provider="http_sentence_transformers",
+        model_id="test/model",
+        revision="immutable-test-revision",
+        dimensions=32,
+        index_version="test-http-batching-v1",
+    )
+    batch_sizes: list[int] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self.payload = payload
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self.payload).encode("utf-8")
+
+    class FakeOpener:
+        def open(self, request: object, *, timeout: float) -> FakeResponse:
+            assert timeout == 10.0
+            if request.get_method() == "GET":
+                return FakeResponse(
+                    {
+                        "ok": True,
+                        "model_id": profile.model_id,
+                        "revision": profile.revision,
+                        "dimensions": profile.dimensions,
+                    }
+                )
+            payload = json.loads(request.data)
+            batch_sizes.append(len(payload["texts"]))
+            return FakeResponse({"vectors": [[0.0] * profile.dimensions for _ in payload["texts"]]})
+
+    monkeypatch.setattr(
+        "yieldmind.knowledge_base.urllib.request.build_opener",
+        lambda _handler: FakeOpener(),
+    )
+    client = HttpEmbeddingFunction(
+        profile,
+        endpoint="http://127.0.0.1:8091",
+        timeout_seconds=10.0,
+        batch_size=4,
+    )
+
+    vectors = client.embed_documents([f"document {index}" for index in range(10)])
+
+    assert len(vectors) == 10
+    assert batch_sizes == [4, 4, 2]
+    assert client.document_encode_calls == 1
+    assert client.http_encode_calls == 3
 
 
 def test_qwen_api_http_smoke_requires_loopback_origin() -> None:

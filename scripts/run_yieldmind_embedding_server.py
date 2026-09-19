@@ -86,7 +86,7 @@ class EmbeddingRuntime:
         return vectors.tolist(), time.perf_counter() - started
 
 
-def handler_factory(runtime: EmbeddingRuntime, token: str):
+def handler_factory(runtime: EmbeddingRuntime, token: str, max_batch_size: int):
     class Handler(BaseHTTPRequestHandler):
         server_version = "YieldMindEmbedding/1.0"
 
@@ -123,8 +123,8 @@ def handler_factory(runtime: EmbeddingRuntime, token: str):
                     raise ValueError("request body must be between 1 byte and 8 MiB")
                 payload = json.loads(self.rfile.read(length))
                 texts = payload.get("texts")
-                if not isinstance(texts, list) or not texts or len(texts) > 256:
-                    raise ValueError("texts must be a non-empty list with at most 256 items")
+                if not isinstance(texts, list) or not texts or len(texts) > max_batch_size:
+                    raise ValueError(f"texts must be a non-empty list with at most {max_batch_size} items")
                 if any(not isinstance(text, str) or not text.strip() or len(text) > 200_000 for text in texts):
                     raise ValueError("each text must be a non-empty string of at most 200000 characters")
                 vectors, duration = runtime.encode(texts)
@@ -155,6 +155,7 @@ def main() -> int:
     parser.add_argument("--model-id", default=QWEN3_MODEL_ID)
     parser.add_argument("--revision", default=QWEN3_REVISION)
     parser.add_argument("--dimensions", type=int, default=QWEN3_DIMENSIONS)
+    parser.add_argument("--max-batch-size", type=int, default=16)
     parser.add_argument("--hf-home", default="")
     parser.add_argument("--hf-endpoint", default="")
     parser.add_argument("--allow-model-download", action="store_true")
@@ -164,6 +165,8 @@ def main() -> int:
         raise ValueError("Embedding server must bind to a loopback address.")
     if not args.revision or args.revision.lower() == "main":
         raise ValueError("An immutable model revision is required.")
+    if args.max_batch_size < 1 or args.max_batch_size > 64:
+        raise ValueError("max-batch-size must be between 1 and 64.")
     if args.hf_home:
         os.environ["HF_HOME"] = str(os.path.abspath(os.path.expanduser(args.hf_home)))
     if args.hf_endpoint:
@@ -191,7 +194,10 @@ def main() -> int:
         dimensions=args.dimensions,
         load_seconds=load_seconds,
     )
-    server = ThreadingHTTPServer((args.host, args.port), handler_factory(runtime, os.environ.get(args.token_env, "")))
+    server = ThreadingHTTPServer(
+        (args.host, args.port),
+        handler_factory(runtime, os.environ.get(args.token_env, ""), args.max_batch_size),
+    )
     print(
         json.dumps(
             {
@@ -200,6 +206,7 @@ def main() -> int:
                 "host": args.host,
                 "port": args.port,
                 "model_download_allowed": bool(args.allow_model_download),
+                "max_batch_size": args.max_batch_size,
                 "hf_home": os.environ.get("HF_HOME", ""),
                 "hf_endpoint": os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
             },
