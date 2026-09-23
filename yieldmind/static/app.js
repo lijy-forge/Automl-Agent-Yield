@@ -436,11 +436,20 @@ function setMetricSlot(key, label, value, note) {
 }
 function renderMetrics(metrics = {}, result = {}) {
   if (isDomainResult(result)) {
-    const completed = (result.stages || []).filter((stage) => stage.status !== "running").length;
-    setMetricSlot("r2", "修订轮次", formatNumber(result.manager_revision_round || 0, 0), `预算 ${formatNumber(result.max_manager_revisions || 0, 0)}`);
-    setMetricSlot("rmse", "Manager 决策", formatNumber((result.manager_decisions || []).length, 0), "全部通过合法边校验");
-    setMetricSlot("mae", "完成节点", formatNumber(completed, 0), `共 ${(result.stages || []).length} 条阶段记录`);
-    setMetricSlot("mape", "模型调用模式", result.model_call_mode || "--", result.real_llm_calls == null ? "调用数未统一计量" : `真实调用 ${result.real_llm_calls} 次`);
+    const champion = domainChampion(result);
+    const oof = champion?.oof_metrics || {};
+    if (champion?.name && Number.isFinite(Number(oof.rmse))) {
+      setMetricSlot("r2", "冠军 OOF R²", formatNumber(oof.r2), champion.name);
+      setMetricSlot("rmse", "冠军 OOF RMSE", formatNumber(oof.rmse), "五折交叉验证，越低越好");
+      setMetricSlot("mae", "冠军 OOF MAE", formatNumber(oof.mae), "折外预测绝对误差");
+      setMetricSlot("mape", "冠军 OOF MAPE", oof.mape == null ? "--" : `${formatNumber(oof.mape, 4)}%`, champion.anchor_metrics ? "已执行 Anchor 验证" : "本轮未接入 Anchor 验证");
+    } else {
+      const completed = (result.stages || []).filter((stage) => stage.status !== "running").length;
+      setMetricSlot("r2", "修订轮次", formatNumber(result.manager_revision_round || 0, 0), `预算 ${formatNumber(result.max_manager_revisions || 0, 0)}`);
+      setMetricSlot("rmse", "Manager 决策", formatNumber((result.manager_decisions || []).length, 0), "全部通过合法边校验");
+      setMetricSlot("mae", "完成节点", formatNumber(completed, 0), `共 ${(result.stages || []).length} 条阶段记录`);
+      setMetricSlot("mape", "模型调用模式", result.model_call_mode || "--", result.real_llm_calls == null ? "调用统计尚未接入" : `真实调用 ${result.real_llm_calls} 次`);
+    }
     return;
   }
   setMetricSlot("r2", "OOF R²", formatNumber(metrics.r2), "最终推荐");
@@ -448,20 +457,54 @@ function renderMetrics(metrics = {}, result = {}) {
   setMetricSlot("mae", "OOF MAE", formatNumber(metrics.mae), "绝对误差");
   setMetricSlot("mape", "OOF MAPE", metrics.mape == null ? "--" : `${formatNumber(metrics.mape, 2)}%`, "百分比误差");
 }
+function domainReport(result) {
+  const operation = result?.operation_result || {};
+  return operation.free_search_report || {};
+}
+function domainChampion(result) {
+  const operation = result?.operation_result || {};
+  return domainReport(result).champion || operation.champion || null;
+}
 function renderDomainOverview(result) {
   const operation = result?.operation_result || {};
+  const report = domainReport(result);
+  const champion = domainChampion(result);
+  const championSpec = champion?.spec || {};
+  const origin = championSpec.model_origin === "llm_model" ? "LLM 生成候选" : championSpec.model_origin === "fixed_family" ? "固定模型族" : championSpec.model_origin || "未记录";
+  const oof = champion?.oof_metrics || {};
+  const bestLlm = report?.contribution_diagnostics?.best_llm || null;
+  const anchor = champion?.anchor_metrics || null;
+  const policy = report?.champion_policy || result?.manager_args?.champion_policy || "mixed";
+  const selectionStatus = report?.selection_status || operation?.selection_status || "--";
+  $("domain-model-result").innerHTML = champion?.name ? `
+    <div class="decision-block"><span>最终冠军</span><strong>${escapeHtml(champion.name)}</strong><p>${escapeHtml(origin)} · ${escapeHtml(championSpec.fusion_mode || championSpec.fusion_id || "未记录融合方式")}</p></div>
+    <div class="decision-block"><span>统一评测结果</span><strong>R² ${formatNumber(oof.r2)} · RMSE ${formatNumber(oof.rmse)}</strong><p>MAE ${formatNumber(oof.mae)} · MAPE ${formatNumber(oof.mape, 4)}%</p></div>
+    <div class="decision-block"><span>选择策略</span><strong>${policy === "llm_only" ? "仅 LLM 候选可当冠军" : "固定与 LLM 候选混合竞争"}</strong><p>${anchor ? `Anchor R² ${formatNumber(anchor.r2)}` : "本轮无 Anchor"}；${bestLlm ? `最佳 LLM 候选 ${escapeHtml(bestLlm.name)}` : "未记录 LLM 对照"}</p></div>`
+    : `<div class="decision-block result-warning"><span>冠军选择</span><strong>未产生合格冠军</strong><p>${policy === "llm_only" ? "固定模型仅作对照，当前 LLM 候选未通过统一验收，不会回退成固定冠军。" : "当前候选未通过统一验收。"}</p></div>
+       <div class="decision-block"><span>选择状态</span><strong>${escapeHtml(selectionStatus)}</strong><p>可在运行产物中查看候选排名和拒绝原因。</p></div>
+       <div class="decision-block"><span>策略</span><strong>${escapeHtml(policy)}</strong><p>本结果明确区分“运行完成”和“选出合格模型”。</p></div>`;
   const review = result?.post_execution_review || {};
-  const decisions = result?.manager_decisions || [];
-  const lastDecision = decisions.length ? decisions[decisions.length - 1] : {};
   const process = result?.process_control || {};
-  $("domain-result-mode").textContent = `${result?.execution_mode || "--"} · ${result?.model_call_mode || "--"}`;
+  const usage = result?.model_usage_summary || {};
+  const perAgent = usage.per_agent || {};
+  const usageAgents = Object.entries(perAgent).map(([agent, row]) => `${agent} ${row.calls || 0} 次 / ${formatNumber(row.total_tokens || 0, 0)} tokens`).join("；");
+  const revisionCount = Number(result?.manager_revision_round || 0);
+  const processMessage = process.status === "completed"
+    ? `隔离进程正常回传，用时 ${formatNumber(process.duration_seconds, 1)} 秒；未触发超时、取消或强制终止。`
+    : process.termination_signal || process.error || "尚无进程控制结果。";
+  const importantArtifacts = [
+    ["final_metrics", "指标"], ["final_predictions", "预测"], ["champion_model", "模型"],
+    ["predict_script", "推理代码"], ["run_result", "完整结果"],
+  ].filter(([name]) => result?.artifacts?.[name]);
+  const artifactLinks = importantArtifacts.map(([name, label]) =>
+    `<a class="artifact-chip" href="/api/runs/${encodeURIComponent(result.run_id)}/artifacts/${encodeURIComponent(name)}" target="_blank" rel="noopener">${label}</a>`
+  ).join("");
+  $("domain-result-mode").textContent = `${result?.execution_mode || "--"} · ${policy} · ${result?.model_call_mode || "--"}`;
   $("domain-decision-audit").innerHTML = `
-    <div class="decision-block"><span>执行前审批</span><strong>${result?.pre_execution_passed ? "已通过" : "未通过 / 未执行"}</strong><p>${result?.pre_execution_passed ? "OperationAgent 获得执行许可。" : "流程不会绕过 Manager 审批。"}</p></div>
-    <div class="decision-block"><span>Operation 结果</span><strong>rcode ${escapeHtml(operation.rcode ?? "--")}</strong><p>${escapeHtml(operation.action_result || operation.stage || "暂无 Operation 结果")}</p></div>
-    <div class="decision-block"><span>Manager Review</span><strong>${review.passed ? "accepted" : escapeHtml(review.decision || "not accepted")}</strong><p>${escapeHtml(review.reason || (review.issues || []).join("；") || "暂无 review 说明")}</p></div>
-    <div class="decision-block"><span>最后路由</span><strong>${escapeHtml(lastDecision.after_stage || "--")} → ${escapeHtml(lastDecision.next_agent || lastDecision.next_node || "--")}</strong><p>${escapeHtml(lastDecision.reason_code || "暂无结构化路由")}</p></div>
-    <div class="decision-block"><span>修订反馈</span><strong>${result?.manager_feedback ? "已生成" : "无"}</strong><p>${escapeHtml(result?.manager_feedback || "当前运行没有进入修订回环。")}</p></div>
-    <div class="decision-block"><span>进程控制</span><strong>${escapeHtml(process.status || (result?.cancelled ? "cancelled" : "--"))}</strong><p>${escapeHtml(process.termination_signal || process.error || "未触发额外终止信号。")}</p></div>`;
+    <div class="decision-block"><span>执行与验收</span><strong>${process.status === "completed" ? "进程正常结束" : escapeHtml(process.status || "未执行")}</strong><p>${escapeHtml(processMessage)} Manager Review：${review.passed ? "通过" : escapeHtml(review.decision || "未通过")}。</p></div>
+    <div class="decision-block"><span>修订恢复</span><strong>${revisionCount} / ${formatNumber(result?.max_manager_revisions || 0, 0)} 轮</strong><p>${escapeHtml(result?.manager_feedback || "本次一次通过，没有进入 Candidate → Model 重规划回环。")}</p></div>
+    <div class="decision-block"><span>LLM 调用统计</span><strong>${formatNumber(usage.calls_total ?? result?.real_llm_calls, 0)} 次 · ${formatNumber(usage.total_tokens, 0)} tokens</strong><p>${escapeHtml(usageAgents || "尚未产生可计量的大模型调用。")} ${usage.calls_unreported ? `；${usage.calls_unreported} 次 Provider 未返回 Token Usage。` : ""}</p></div>
+    <div class="decision-block artifact-shortcuts"><span>关键产物</span><strong>${importantArtifacts.length} 个快捷入口</strong><p>${artifactLinks || "本次运行尚未生成可下载的模型产物。"}</p></div>`;
 }
 function configureResultMode(result) {
   const domain = isDomainResult(result);
@@ -480,18 +523,30 @@ function configureResultMode(result) {
 }
 function renderPipeline(result) {
   const stages = result?.stages || [];
+  const decisions = result?.manager_decisions || [];
   $("workflow-backend").textContent = `${result?.workflow_backend || "--"} · ${result?.checkpoint_backend || "--"}`;
   const passed = stages.filter((stage) => stage.status === "passed").length;
+  const repeated = stages.reduce((counts, stage) => ({ ...counts, [stage.stage]: (counts[stage.stage] || 0) + 1 }), {});
+  const loopCount = Object.values(repeated).reduce((sum, count) => sum + Math.max(0, count - 1), 0);
   $("pipeline-summary").textContent = stages.length
     ? isDomainResult(result)
-      ? `${passed}/${stages.length} 节点通过 · Manager 修订 ${result?.manager_revision_round || 0} 次 · 路由决策 ${(result?.manager_decisions || []).length} 条`
+      ? `${passed}/${stages.length} 节点完成 · ${decisions.length} 次路由 · ${loopCount} 个重复节点（修订回环）`
       : `${passed}/${stages.length} 节点通过 · 修复 ${result?.local_repair_count || 0} 次 · 重规划 ${result?.replan_count || 0} 次`
     : "暂无节点记录";
-  $("pipeline").innerHTML = stages.length ? stages.map((stage, index) => `
-    <div class="pipeline-node ${escapeHtml(stage.status)}" title="${escapeHtml(stage.message)}">
-      <span class="node-index">${String(index + 1).padStart(2, "0")} · ${escapeHtml(stage.status)}</span>
-      <strong>${escapeHtml(STAGE_LABELS[stage.stage] || stage.stage)}</strong><small>${escapeHtml(stage.message)}</small>
-    </div>`).join("") : '<div class="empty-panel">暂无节点记录</div>';
+  const usedDecisionIndexes = new Set();
+  $("pipeline").innerHTML = stages.length ? stages.map((stage, index) => {
+    const decisionIndex = decisions.findIndex((decision, i) => !usedDecisionIndexes.has(i) && decision.after_stage === stage.stage);
+    const decision = decisionIndex >= 0 ? decisions[decisionIndex] : null;
+    if (decisionIndex >= 0) usedDecisionIndexes.add(decisionIndex);
+    const duration = Number(stage.duration_ms);
+    const route = decision ? `${decision.after_stage} → ${decision.next_node}` : index < stages.length - 1 ? `${stage.stage} → ${stages[index + 1].stage}` : "流程终点";
+    return `<div class="pipeline-step">
+      <details class="pipeline-node ${escapeHtml(stage.status)}">
+        <summary><span class="node-index">${String(index + 1).padStart(2, "0")} · ${escapeHtml(stage.status)}</span><strong>${escapeHtml(STAGE_LABELS[stage.stage] || stage.stage)}</strong><small>${escapeHtml(stage.agent || "Agent Manager")} · 尝试 ${escapeHtml(stage.attempt || 1)}${Number.isFinite(duration) ? ` · ${formatNumber(duration, 0)} ms` : ""}</small></summary>
+        <p>${escapeHtml(stage.message || "节点已完成")}</p><code>${escapeHtml(route)}</code>${decision?.reason_code ? `<em>${escapeHtml(decision.reason_code)}</em>` : ""}
+      </details>${index < stages.length - 1 ? '<span class="pipeline-arrow" aria-hidden="true">→</span>' : ""}
+    </div>`;
+  }).join("") : '<div class="empty-panel">暂无节点记录</div>';
 }
 function renderCandidates(benchmark) {
   const rows = benchmark?.strategy_benchmarks || [];
@@ -545,7 +600,12 @@ function renderDecision(benchmark, profile) {
 }
 function renderArtifacts(result) {
   const entries = Object.entries(result?.artifacts || {});
-  $("artifact-list").innerHTML = entries.length ? entries.map(([name, path]) => `<div class="artifact-row"><strong>${escapeHtml(name)}</strong><code>${escapeHtml(path)}</code><span>${escapeHtml(String(path).split(".").pop().toUpperCase())}</span></div>`).join("") : '<div class="empty-panel">暂无运行产物</div>';
+  $("artifact-list").innerHTML = entries.length ? entries.map(([name, path]) => {
+    const extension = String(path).split(".").pop().toUpperCase();
+    const href = result?.run_id ? `/api/runs/${encodeURIComponent(result.run_id)}/artifacts/${encodeURIComponent(name)}` : "";
+    const label = extension === "JOBLIB" || extension === "CSV" ? "下载" : "查看";
+    return `<div class="artifact-row"><strong>${escapeHtml(name)}</strong><code>${escapeHtml(path)}</code>${href ? `<a class="artifact-link" href="${href}" target="_blank" rel="noopener">${label} ${escapeHtml(extension)}</a>` : `<span>${escapeHtml(extension)}</span>`}</div>`;
+  }).join("") : '<div class="empty-panel">暂无运行产物</div>';
 }
 function renderTrace(result) {
   const rows = result?.stages || [];
@@ -700,6 +760,7 @@ async function runWorkflow() {
       n_revise: Number($("revision-rounds").value || 0),
       operation_attempts: Number($("operation-attempts").value || 3),
       execution_mode: $("execution-mode").value,
+      champion_policy: $("champion-policy").value,
       use_knowledge_search: $("domain-knowledge-search").checked,
       knowledge_top_k: 5,
       knowledge_context_budget_chars: 12000,

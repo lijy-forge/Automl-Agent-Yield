@@ -444,6 +444,8 @@ def finalize_and_write(
         "champion_selection": search.get("champion_selection"),
         "research_champion": search.get("research_champion"),
         "champion_pool_basis": search.get("champion_pool_basis"),
+        "champion_policy": search.get("champion_policy", "mixed"),
+        "selection_status": search.get("selection_status"),
         "n_splits": search.get("n_splits") or free_result.get("n_splits"),
         "random_state": search.get("random_state") or free_result.get("random_state"),
         "base_random_state": free_result.get("base_random_state"),
@@ -545,8 +547,14 @@ def finalize_and_write(
         "action_result": (
             f"Free search picked champion {champion['name']} "
             f"(pool={search.get('champion_pool_basis')})." if champion
+            else "Free search produced no acceptable LLM-generated champion."
+            if search.get("selection_status") == "no_acceptable_llm_candidate"
             else "Free search produced no champion."),
-        "error_logs": [],
+        "error_logs": (
+            ["No LLM-generated candidate passed the champion eligibility and baseline guardrails; fixed models remained comparison-only."]
+            if search.get("selection_status") == "no_acceptable_llm_candidate"
+            else []
+        ),
     }
 
 
@@ -679,10 +687,7 @@ def verify_free_search_run(run_dir: str | Path, *, started_at: float, anchor_exp
     reasons: list[str] = []
     warnings: list[str] = []
 
-    required = [run_dir / "metrics" / "free_search_report.json",
-                run_dir / "metrics" / "predictions.csv",
-                run_dir / "trained_models" / "champion.joblib",
-                run_dir / "predict.py"]
+    required = [run_dir / "metrics" / "free_search_report.json"]
     for path in required:
         if not path.exists():
             reasons.append(f"missing artifact: {path.name}")
@@ -698,8 +703,26 @@ def verify_free_search_run(run_dir: str | Path, *, started_at: float, anchor_exp
 
     champion = report.get("champion")
     if not champion or not champion.get("name"):
-        reasons.append("no champion recorded in free_search_report.json")
+        if report.get("selection_status") == "no_acceptable_llm_candidate":
+            reasons.append("no acceptable LLM-generated champion; fixed models were comparison-only")
+        else:
+            reasons.append("no champion recorded in free_search_report.json")
         return {"passed": False, "reasons": reasons, "warnings": warnings}
+
+    for path in (
+        run_dir / "metrics" / "predictions.csv",
+        run_dir / "trained_models" / "champion.joblib",
+        run_dir / "predict.py",
+    ):
+        if not path.exists():
+            reasons.append(f"missing artifact: {path.name}")
+        elif path.stat().st_mtime + 1.0 < started_at:
+            reasons.append(f"stale artifact (not written this run): {path.name}")
+
+    policy = str(report.get("champion_policy") or "mixed")
+    origin = str((champion.get("spec") or {}).get("model_origin") or "fixed_family")
+    if policy == "llm_only" and origin != "llm_model":
+        reasons.append(f"llm_only policy selected ineligible champion origin: {origin}")
 
     pool_basis = report.get("champion_pool_basis")
     if anchor_expected:

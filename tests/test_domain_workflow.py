@@ -8,8 +8,14 @@ from fastapi.testclient import TestClient
 
 import yieldmind.api as yieldmind_api
 from yieldmind.database import YieldMindStore
-from yieldmind.domain_workflow import DomainWorkflowRequest, RealYieldDomainAdapter, YieldDomainWorkflow
+from yieldmind.domain_workflow import (
+    DomainWorkflowRequest,
+    RealYieldDomainAdapter,
+    YieldDomainWorkflow,
+    _artifact_map,
+)
 from yieldmind.memory import AddMessageRequest, CreateSessionRequest, SessionMemoryStore
+from yieldmind.model_usage import build_model_usage_record
 from yieldmind.process_control import ManagedProcessOutcome
 from yieldmind.repair_memory import RepairMemoryStore
 from yieldmind.task_queue import EnqueueDomainWorkflowRequest, enqueue_domain_workflow
@@ -115,6 +121,41 @@ class RepairingDomainAdapter(FakeDomainAdapter):
         )
 
 
+class MeteredDomainAdapter(FakeDomainAdapter):
+    uses_live_llm = True
+
+    def candidate(self, state: dict[str, Any]) -> dict[str, Any]:
+        self.candidate_calls += 1
+        return self._ok(
+            "candidate",
+            model_usage_records=[
+                build_model_usage_record(
+                    agent="CandidateAgent",
+                    stage="candidate",
+                    purpose="candidate_strategy_generation",
+                    provider="test",
+                    model="test-model",
+                    usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                )
+            ],
+        )
+
+    def model(self, state: dict[str, Any]) -> dict[str, Any]:
+        return self._ok(
+            "model",
+            model_usage_records=[
+                build_model_usage_record(
+                    agent="ModelAgent",
+                    stage="model",
+                    purpose="implementation_plan_generation",
+                    provider="test",
+                    model="test-model",
+                    usage={"input_tokens": 8, "output_tokens": 2, "total_tokens": 10},
+                )
+            ],
+        )
+
+
 def _run(
     tmp_path: Path,
     adapter: FakeDomainAdapter,
@@ -209,6 +250,25 @@ def test_domain_stategraph_runs_original_phase_order_with_fake_adapter(tmp_path:
     assert len(manager_events) == len(result["manager_decisions"])
     assert manager_events[-1]["decision"]["next_node"] == "finish"
     json.dumps(result)
+
+
+def test_domain_stategraph_aggregates_real_model_usage_across_agents(tmp_path: Path) -> None:
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    result = YieldDomainWorkflow(store=store, adapter=MeteredDomainAdapter()).run(
+        DomainWorkflowRequest(
+            run_dir=str(tmp_path / "run"),
+            synthetic_data=True,
+            external_search=False,
+            require_search_results=False,
+            allow_live_llm=True,
+        )
+    )
+
+    assert result["real_llm_calls"] == 2
+    assert result["model_call_mode"] == "live_metered"
+    assert result["model_usage_summary"]["total_tokens"] == 25
+    assert result["model_usage_summary"]["per_agent"]["CandidateAgent"]["calls"] == 1
+    assert result["model_usage_summary"]["per_agent"]["ModelAgent"]["calls"] == 1
 
 
 def test_domain_stategraph_revises_candidate_and_model_with_bounded_loop(tmp_path: Path) -> None:
@@ -582,6 +642,65 @@ def test_operation_runtime_log_is_streamed_once_as_agent_detail(tmp_path: Path) 
     assert emitted[1]["attempt"] == 2
     assert emitted[1]["detail_status"] == "success"
     assert "runtime_event" in emitted[1]["output_summary"]
+
+
+def test_domain_artifact_map_includes_generated_code_and_final_outputs(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    expected = {
+        "logs/models/generated_model.py": "MODEL_SPEC = {}\n",
+        "logs/mechanisms/generated_mechanism.py": "MECHANISM_SPEC = {}\n",
+        "metrics/free_search_report.json": "{}\n",
+        "metrics/predictions.csv": "y_true,y_pred\n1,1\n",
+        "metrics/recommendations.md": "# Recommendation\n",
+        "predict.py": "print('predict')\n",
+        "trained_models/champion.joblib": "model-bytes",
+    }
+    for relative_path, content in expected.items():
+        path = run_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    artifacts = _artifact_map(run_dir)
+
+    assert artifacts["generated_model_generated_model"].endswith("logs/models/generated_model.py")
+    assert artifacts["generated_mechanism_generated_mechanism"].endswith(
+        "logs/mechanisms/generated_mechanism.py"
+    )
+    assert artifacts["final_metrics"].endswith("metrics/free_search_report.json")
+    assert artifacts["predictions"].endswith("metrics/predictions.csv")
+    assert artifacts["predict_script"].endswith("predict.py")
+    assert artifacts["champion_model"].endswith("trained_models/champion.joblib")
+
+
+def test_run_artifact_api_enriches_historical_result_and_serves_allowlisted_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    run_dir = project_root / "agent_workspace" / "runs" / "historical"
+    model_path = run_dir / "logs" / "models" / "generated.py"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_text("MODEL_SPEC = {'id': 'generated'}\n", encoding="utf-8")
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    run_id = store.create_run(mode="domain", source="test", status="passed")
+    store.update_run(
+        run_id,
+        status="passed",
+        result={"run_id": run_id, "run_dir": str(run_dir), "artifacts": {}},
+        completed=True,
+    )
+    monkeypatch.setattr(yieldmind_api, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(yieldmind_api, "store", store)
+    client = TestClient(yieldmind_api.app)
+
+    history_response = client.get(f"/api/runs/{run_id}")
+    artifact_response = client.get(
+        f"/api/runs/{run_id}/artifacts/generated_model_generated"
+    )
+
+    assert history_response.status_code == 200
+    assert "generated_model_generated" in history_response.json()["run"]["result"]["artifacts"]
+    assert artifact_response.status_code == 200
+    assert "MODEL_SPEC" in artifact_response.text
 
 
 def test_real_operation_timeout_is_failed_not_passed(tmp_path: Path, monkeypatch) -> None:

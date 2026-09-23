@@ -28,6 +28,7 @@ from yieldmind.database import YieldMindStore
 from yieldmind.domain_retrieval import build_domain_knowledge_queries, retrieve_domain_knowledge
 from yieldmind.knowledge_runtime import configured_embedding, configured_knowledge_base
 from yieldmind.memory import SessionMemoryStore, render_session_context, session_context_summary
+from yieldmind.model_usage import merge_model_usage_records, summarize_model_usage
 from yieldmind.process_control import ManagedProcessOutcome, run_managed_process
 from yieldmind.repair_memory import RepairMemoryStore, normalized_error_signature, operation_error_text
 
@@ -50,6 +51,7 @@ class DomainWorkflowRequest(BaseModel):
     synthetic_n: int = Field(default=800, ge=100, le=10000)
     query: list[str] = Field(default_factory=list)
     execution_mode: str = Field(default="free_search", pattern=r"^(free_search|plugin|llm_freeform)$")
+    champion_policy: str = Field(default="mixed", pattern=r"^(mixed|llm_only)$")
     operation_timeout_seconds: float = Field(default=900.0, ge=1.0, le=86400.0)
     allow_live_llm: bool = False
     workspace_id: str = Field(default="default", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
@@ -288,6 +290,8 @@ class DomainWorkflowState(TypedDict, total=False):
     real_llm_calls: int | None
     simulated_model_calls: int
     model_call_mode: str
+    model_usage_records: list[dict[str, Any]]
+    model_usage_summary: dict[str, Any]
 
 
 class DomainWorkflowAdapter(Protocol):
@@ -312,6 +316,7 @@ _RUNTIME_ENV_KEYS = (
     "YIELD_ANCHOR_PATH",
     "YIELD_SYNTHETIC_REPORT_PATH",
     "YIELD_EXECUTION_MODE",
+    "YIELD_CHAMPION_POLICY",
 )
 
 
@@ -372,7 +377,16 @@ def _artifact_map(run_dir: Path) -> dict[str, str]:
         "run_result": run_dir / "run_result.json",
         "post_execution_review": run_dir / "post_execution_review.json",
         "manager_revision_notes": run_dir / "manager_revision_notes.json",
+        "final_metrics": run_dir / "metrics" / "free_search_report.json",
+        "predictions": run_dir / "metrics" / "predictions.csv",
+        "recommendations": run_dir / "metrics" / "recommendations.md",
+        "predict_script": run_dir / "predict.py",
+        "champion_model": run_dir / "trained_models" / "champion.joblib",
     }
+    for path in sorted((run_dir / "logs" / "models").glob("*.py")):
+        candidates[f"generated_model_{path.stem}"] = path
+    for path in sorted((run_dir / "logs" / "mechanisms").glob("*.py")):
+        candidates[f"generated_mechanism_{path.stem}"] = path
     return {name: str(path.resolve()) for name, path in candidates.items() if path.exists()}
 
 
@@ -652,7 +666,7 @@ class RealYieldDomainAdapter:
             repair_memory_context=str(state.get("repair_memory_context") or ""),
             session_context=str(state.get("session_context_prompt") or ""),
         )
-        return self._result(state)
+        return self._result(state, model_usage_records=list(manager.model_usage_records))
 
     def model(self, state: DomainWorkflowState) -> dict[str, Any]:
         manager = _hydrate_manager(state, cancel_check=self.cancel_check)
@@ -661,7 +675,7 @@ class RealYieldDomainAdapter:
             repair_memory_context=str(state.get("repair_memory_context") or ""),
             session_context=str(state.get("session_context_prompt") or ""),
         )
-        return self._result(state)
+        return self._result(state, model_usage_records=list(manager.model_usage_records))
 
     def pre_execution(self, state: DomainWorkflowState) -> dict[str, Any]:
         manager = _hydrate_manager(state, cancel_check=self.cancel_check)
@@ -782,6 +796,7 @@ class RealYieldDomainAdapter:
             operation_result=result,
             process_control=outcome.metadata(),
             cancelled=bool(result.get("cancelled")),
+            model_usage_records=list(result.get("model_usage_records") or []),
         )
 
     def review(self, state: DomainWorkflowState) -> dict[str, Any]:
@@ -1086,6 +1101,8 @@ class YieldDomainWorkflow:
         ):
             if key in result:
                 summary[key] = result[key]
+        if result.get("model_usage_records") is not None:
+            summary["model_usage"] = summarize_model_usage(result.get("model_usage_records") or [])
         if result.get("manager_feedback"):
             summary["manager_feedback"] = str(result["manager_feedback"])
         operation = result.get("operation_result") or {}
@@ -1254,6 +1271,15 @@ class YieldDomainWorkflow:
         ):
             if key in result:
                 state[key] = result[key]
+        if "model_usage_records" in result:
+            state["model_usage_records"] = merge_model_usage_records(
+                state.get("model_usage_records"),
+                result.get("model_usage_records"),
+            )
+            summary = summarize_model_usage(state["model_usage_records"])
+            state["model_usage_summary"] = summary
+            state["real_llm_calls"] = int(summary["calls_total"])
+            state["model_call_mode"] = str(summary["mode"])
         if result.get("artifacts"):
             state.setdefault("artifacts", {}).update(result["artifacts"])
         ok = bool(result.get("ok", True))
@@ -1758,6 +1784,7 @@ class YieldDomainWorkflow:
             "session_id": request.session_id,
             "turn_id": request.turn_id,
             "session_context_max_tokens": request.session_context_max_tokens,
+            "champion_policy": request.champion_policy,
         }
         state: DomainWorkflowState = {
             "thread_id": f"yield_domain_{uuid.uuid4().hex[:12]}",
@@ -1780,7 +1807,11 @@ class YieldDomainWorkflow:
             "knowledge_context_budget_chars": request.knowledge_context_budget_chars,
             "knowledge_search_report": {},
             "run_dir": str(run_dir),
-            "runtime_env": {"YIELD_RUN_DIR": str(run_dir), "YIELD_EXECUTION_MODE": request.execution_mode},
+            "runtime_env": {
+                "YIELD_RUN_DIR": str(run_dir),
+                "YIELD_EXECUTION_MODE": request.execution_mode,
+                "YIELD_CHAMPION_POLICY": request.champion_policy,
+            },
             "runtime_contract": _runtime_contract(),
             "data_contract": {},
             "data_lineage": {},
@@ -1822,6 +1853,8 @@ class YieldDomainWorkflow:
                 if self.adapter.uses_live_llm
                 else "simulated_test_adapter"
             ),
+            "model_usage_records": [],
+            "model_usage_summary": summarize_model_usage([]),
         }
         graph = self._build_graph()
         config = {"configurable": {"thread_id": state["thread_id"]}}

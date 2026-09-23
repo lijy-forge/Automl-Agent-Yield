@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from knowledge.yield_data_lineage import summarize_dataset_lineage
 from knowledge.yield_schema import TARGET_COLUMN, load_yield_dataframe
 from yieldmind.database import YieldMindStore
-from yieldmind.domain_workflow import DomainWorkflowRequest, run_domain_workflow
+from yieldmind.domain_workflow import DomainWorkflowRequest, _artifact_map, run_domain_workflow
 from yieldmind.evaluation import run_offline_evaluation
 from yieldmind.function_calling import ToolCallProtocolError, ToolPlanRequest, execute_plan, plan_tools
 from yieldmind.knowledge_base import KnowledgeBase, KnowledgeIngestRequest, KnowledgeSearchRequest
@@ -236,7 +236,34 @@ def get_run(run_id: str) -> dict[str, Any]:
     run = store.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
+    result = run.get("result")
+    if isinstance(result, dict) and result.get("run_dir"):
+        run_dir = Path(str(result["run_dir"])).resolve()
+        allowed_root = (PROJECT_ROOT / "agent_workspace" / "runs").resolve()
+        if run_dir.is_relative_to(allowed_root):
+            result["artifacts"] = _artifact_map(run_dir)
     return {"run": run}
+
+
+@app.get("/api/runs/{run_id}/artifacts/{artifact_name}")
+def get_run_artifact(run_id: str, artifact_name: str) -> FileResponse:
+    run = store.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    result = run.get("result")
+    if not isinstance(result, dict) or not result.get("run_dir"):
+        raise HTTPException(status_code=404, detail="run has no artifact directory")
+    run_dir = Path(str(result["run_dir"])).resolve()
+    allowed_root = (PROJECT_ROOT / "agent_workspace" / "runs").resolve()
+    if not run_dir.is_relative_to(allowed_root):
+        raise HTTPException(status_code=403, detail="artifact directory is outside the allowed run workspace")
+    artifact_path_text = _artifact_map(run_dir).get(artifact_name)
+    if not artifact_path_text:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    artifact_path = Path(artifact_path_text).resolve()
+    if not artifact_path.is_relative_to(run_dir) or not artifact_path.is_file():
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return FileResponse(artifact_path)
 
 
 @app.get("/api/runs/{run_id}/events")

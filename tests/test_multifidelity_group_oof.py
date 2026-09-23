@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LinearRegression
 
 from knowledge.yield_joint_search import Candidate, evaluate_candidate, run_joint_search
 
@@ -120,3 +121,57 @@ def test_joint_search_exposes_grouped_baseline_audit(tmp_path) -> None:
     assert baseline["split_strategy"] == "group_kfold"
     assert baseline["group_column"] == "base_hf_id"
     assert baseline["n_unique_groups"] == 4
+
+
+def test_llm_only_keeps_fixed_candidates_as_comparison_without_fallback(tmp_path) -> None:
+    data_path = tmp_path / "linear.csv"
+    x = np.linspace(0.1, 2.0, 24)
+    pd.DataFrame(
+        {"sample_id": [f"s{i}" for i in range(len(x))], "feature": x, "yield_stress": 2.0 * x + 1.0}
+    ).to_csv(data_path, index=False)
+    fixed = Candidate(
+        "fixed-linear",
+        LinearRegression,
+        spec={"model_origin": "fixed_family", "fusion_mode": "raw_ml"},
+    )
+    generated = Candidate(
+        "llm-mean",
+        _MeanRegressor,
+        spec={"model_origin": "llm_model", "fusion_mode": "raw_ml"},
+    )
+
+    mixed = run_joint_search([fixed, generated], data_path, n_splits=3, champion_policy="mixed")
+    llm_only = run_joint_search([fixed, generated], data_path, n_splits=3, champion_policy="llm_only")
+
+    assert mixed["champion"]["name"] == "fixed-linear"
+    assert llm_only["champion"] is None
+    assert llm_only["selection_status"] == "no_acceptable_llm_candidate"
+    assert llm_only["champion_selection"]["comparison_only_candidate_count"] == 1
+    fixed_row = next(row for row in llm_only["ranked"] if row["name"] == "fixed-linear")
+    assert fixed_row["champion_eligible"] is False
+    assert fixed_row["champion_exclusion_reason"] == "fixed_family_is_comparison_only"
+
+
+def test_llm_only_selects_generated_model_that_matches_baseline(tmp_path) -> None:
+    data_path = tmp_path / "linear.csv"
+    x = np.linspace(0.1, 2.0, 24)
+    pd.DataFrame(
+        {"sample_id": [f"s{i}" for i in range(len(x))], "feature": x, "yield_stress": 2.0 * x + 1.0}
+    ).to_csv(data_path, index=False)
+    fixed = Candidate(
+        "fixed-mean",
+        _MeanRegressor,
+        spec={"model_origin": "fixed_family", "fusion_mode": "raw_ml"},
+    )
+    generated = Candidate(
+        "llm-linear",
+        LinearRegression,
+        spec={"model_origin": "llm_model", "fusion_mode": "raw_ml"},
+    )
+
+    result = run_joint_search([fixed, generated], data_path, n_splits=3, champion_policy="llm_only")
+
+    assert result["champion"]["name"] == "llm-linear"
+    assert result["champion"]["spec"]["model_origin"] == "llm_model"
+    assert result["selection_status"] == "selected"
+    assert result["champion_selection"]["policy"] == "llm_only"

@@ -3,6 +3,7 @@ import re
 import time
 
 from configs import AVAILABLE_LLMs, OPERATION_MAX_ERROR_CHARS
+from yieldmind.model_usage import build_model_usage_record
 from operation_agent.execution import execute_multifile_package, execute_script
 from operation_agent.yield_guardrails import (
     build_yield_contract_instruction,
@@ -45,6 +46,36 @@ class OperationAgent:
         self.research_mode = bool(research_mode)
         self.research_scope = str(research_scope or "").strip().lower()
         self.money = {}
+        self.model_usage_records = []
+
+    def _record_llm_usage(self, *, purpose, attempt, usage, duration_ms=None):
+        self.model_usage_records.append(
+            build_model_usage_record(
+                agent="OperationAgent",
+                stage="operation",
+                purpose=purpose,
+                provider=self.llm,
+                model=self.model,
+                usage=usage,
+                attempt=int(attempt) + 1,
+                duration_ms=duration_ms,
+            )
+        )
+
+    @staticmethod
+    def _usage_payload(usage):
+        if usage is None:
+            return {}
+        if isinstance(usage, dict):
+            return dict(usage)
+        if hasattr(usage, "to_dict"):
+            try:
+                return usage.to_dict(mode="json")
+            except TypeError:
+                return usage.to_dict()
+        if hasattr(usage, "model_dump"):
+            return usage.model_dump()
+        return {}
 
     def _save_failed_candidate(self, raw_completion: str, iteration: int, reason: str, code: str | None = None):
         try:
@@ -171,6 +202,7 @@ Output format:
                     "Return ONLY one ```python code block defining CANDIDATE_SPEC, "
                     "add_features(df, fit_context), and make_model(random_state)."
                 )
+                call_started = time.perf_counter()
                 res = get_client(self.llm).chat.completions.create(
                     model=self.model,
                     messages=[
@@ -180,7 +212,13 @@ Output format:
                     temperature=0.2,
                 )
                 raw_completion = res.choices[0].message.content.strip()
-                self.money[f"Operation_Plugin_{iteration}"] = res.usage.to_dict(mode="json")
+                self.money[f"Operation_Plugin_{iteration}"] = self._usage_payload(getattr(res, "usage", None))
+                self._record_llm_usage(
+                    purpose="plugin_code_generation",
+                    attempt=iteration,
+                    usage=getattr(res, "usage", None),
+                    duration_ms=(time.perf_counter() - call_started) * 1000.0,
+                )
                 source = self._extract_single_file_code(raw_completion) or self._strip_markdown_code_fences(raw_completion)
 
                 reasons = validate_plugin_source(source)
@@ -231,6 +269,7 @@ Output format:
                     f"# Feedback on your previous attempt\n{log}\n\n"
                     "Return ONLY one ```python code block defining MECHANISM_SPEC and shape(df, params)."
                 )
+                call_started = time.perf_counter()
                 res = get_client(self.llm).chat.completions.create(
                     model=self.model,
                     messages=[
@@ -240,7 +279,13 @@ Output format:
                     temperature=0.2,
                 )
                 raw_completion = res.choices[0].message.content.strip()
-                self.money[f"Operation_Mechanism_{iteration}"] = res.usage.to_dict(mode="json")
+                self.money[f"Operation_Mechanism_{iteration}"] = self._usage_payload(getattr(res, "usage", None))
+                self._record_llm_usage(
+                    purpose="mechanism_code_generation",
+                    attempt=iteration,
+                    usage=getattr(res, "usage", None),
+                    duration_ms=(time.perf_counter() - call_started) * 1000.0,
+                )
                 source = self._extract_single_file_code(raw_completion) or self._strip_markdown_code_fences(raw_completion)
 
                 reasons, mechanism = preflight_mechanism(source, sample_df)
@@ -294,6 +339,7 @@ Output format:
                     "Return ONLY one ```python code block defining MODEL_SPEC and "
                     "make_estimator(params, random_state)."
                 )
+                call_started = time.perf_counter()
                 res = get_client(self.llm).chat.completions.create(
                     model=self.model,
                     messages=[
@@ -303,7 +349,13 @@ Output format:
                     temperature=0.2,
                 )
                 raw_completion = res.choices[0].message.content.strip()
-                self.money[f"Operation_Model_{iteration}"] = res.usage.to_dict(mode="json")
+                self.money[f"Operation_Model_{iteration}"] = self._usage_payload(getattr(res, "usage", None))
+                self._record_llm_usage(
+                    purpose="model_factory_generation",
+                    attempt=iteration,
+                    usage=getattr(res, "usage", None),
+                    duration_ms=(time.perf_counter() - call_started) * 1000.0,
+                )
                 source = self._extract_single_file_code(raw_completion) or self._strip_markdown_code_fences(raw_completion)
 
                 reasons, model = preflight_model(source, sample_df, y_sample)
@@ -345,6 +397,7 @@ Output format:
         for iteration in range(max(1, int(n_attempts))):
             try:
                 prompt = self._build_exec_prompt(code_instructions, code, log)
+                call_started = time.perf_counter()
                 res = get_client(self.llm).chat.completions.create(
                     model=self.model,
                     messages=[
@@ -354,7 +407,13 @@ Output format:
                     temperature=0.3,
                 )
                 raw_completion = res.choices[0].message.content.strip()
-                self.money[f"Operation_Coding_{iteration}"] = res.usage.to_dict(mode="json")
+                self.money[f"Operation_Coding_{iteration}"] = self._usage_payload(getattr(res, "usage", None))
+                self._record_llm_usage(
+                    purpose="training_code_generation_or_repair",
+                    attempt=iteration,
+                    usage=getattr(res, "usage", None),
+                    duration_ms=(time.perf_counter() - call_started) * 1000.0,
+                )
 
                 multifile = self._parse_multifile_response(raw_completion)
                 if multifile:

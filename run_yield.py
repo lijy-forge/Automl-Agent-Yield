@@ -24,6 +24,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from configs import AVAILABLE_LLMs, DEFAULT_LLM, LOW_TOKEN_MODE, LOW_TOKEN_N_REVISE
+from yieldmind.model_usage import build_model_usage_record
 from knowledge.yield_domain import (
     DEFAULT_YIELD_SEARCH_QUERIES,
     REFERENCE_MECHANISM_NOTES,
@@ -124,23 +125,49 @@ def _llm_chat_completion_worker(
     messages: list[dict[str, str]],
     temperature: float,
 ) -> None:
+    started = time.perf_counter()
     try:
         response = get_client(llm).chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
         )
-        result_queue.put({"ok": True, "content": response.choices[0].message.content or ""})
+        usage = getattr(response, "usage", None)
+        if usage is not None and hasattr(usage, "to_dict"):
+            try:
+                usage = usage.to_dict(mode="json")
+            except TypeError:
+                usage = usage.to_dict()
+        elif usage is not None and hasattr(usage, "model_dump"):
+            usage = usage.model_dump()
+        result_queue.put(
+            {
+                "ok": True,
+                "content": response.choices[0].message.content or "",
+                "usage": usage if isinstance(usage, dict) else None,
+                "duration_ms": (time.perf_counter() - started) * 1000.0,
+            }
+        )
     except Exception as exc:
-        result_queue.put({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        result_queue.put(
+            {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "duration_ms": (time.perf_counter() - started) * 1000.0,
+            }
+        )
 
 
-def _chat_completion_content_with_process_timeout(
+def _chat_completion_with_process_timeout(
     label: str,
     llm: str,
     messages: list[dict[str, str]],
     temperature: float,
-) -> str:
+    *,
+    agent: str,
+    stage: str,
+    purpose: str,
+) -> dict[str, Any]:
     timeout_seconds = _agent_llm_timeout_seconds()
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue()
@@ -164,7 +191,18 @@ def _chat_completion_content_with_process_timeout(
         raise RuntimeError(f"{label} exited without returning a completion")
     if not isinstance(result, dict) or not result.get("ok"):
         raise RuntimeError(result.get("error", "unknown LLM completion failure") if isinstance(result, dict) else result)
-    return str(result.get("content") or "").strip()
+    return {
+        "content": str(result.get("content") or "").strip(),
+        "model_usage_record": build_model_usage_record(
+            agent=agent,
+            stage=stage,
+            purpose=purpose,
+            provider=llm,
+            model=AVAILABLE_LLMs[llm]["model"],
+            usage=result.get("usage"),
+            duration_ms=result.get("duration_ms"),
+        ),
+    }
 
 
 def _operation_agent_worker(
@@ -182,11 +220,13 @@ def _operation_agent_worker(
             code_path=code_path,
             task=task,
         )
-        return op.implement_solution(
+        result = op.implement_solution(
             instructions,
             full_pipeline=False,
             n_attempts=max(1, int(n_attempts)),
         )
+        result["model_usage_records"] = list(op.model_usage_records)
+        return result
     except Exception as exc:
         return {
             "rcode": 1,
@@ -1818,6 +1858,7 @@ def run_model_plan_stage(
     repair_memory_context: str = "",
     session_context: str = "",
 ) -> dict[str, Any]:
+    model_usage_records: list[dict[str, Any]] = []
     prompt_search_report = _compact_search_report_for_prompt(search_report, max_snippets=18)
     prompt = f"""
 You are the ModelAgent for yield-stress AutoML. Create one implementation-ready
@@ -1905,7 +1946,7 @@ features, target, evaluation, feature_pipeline, benchmark_alignment,
 implementation_validation, artifacts.
 """
     try:
-        content = _chat_completion_content_with_process_timeout(
+        completion = _chat_completion_with_process_timeout(
             "ModelAgent LLM planning",
             llm,
             [
@@ -1913,8 +1954,24 @@ implementation_validation, artifacts.
                 {"role": "user", "content": prompt},
             ],
             0.4,
+            agent="ModelAgent",
+            stage="model",
+            purpose="implementation_plan_generation",
         )
+        content = completion["content"]
+        model_usage_records.append(completion["model_usage_record"])
     except Exception as exc:
+        model_usage_records.append(
+            build_model_usage_record(
+                agent="ModelAgent",
+                stage="model",
+                purpose="implementation_plan_generation",
+                provider=llm,
+                model=AVAILABLE_LLMs[llm]["model"],
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        )
         content = json.dumps(
             {
                 "selected_approach": "LLM-generated flexible regression model",
@@ -1932,6 +1989,7 @@ implementation_validation, artifacts.
         "stage": "model_plan",
         "llm": llm,
         "content": content,
+        "_model_usage_records": model_usage_records,
     }
 
 
@@ -1944,6 +2002,7 @@ def run_candidate_stage(
     repair_memory_context: str = "",
     session_context: str = "",
 ) -> dict[str, Any]:
+    model_usage_records: list[dict[str, Any]] = []
     prompt_search_report = _compact_search_report_for_prompt(search_report, max_snippets=20)
     prompt = f"""
 You are the CandidateAgent for yield-stress AutoML.
@@ -2305,7 +2364,7 @@ Important:
         },
     }
     try:
-        content = _chat_completion_content_with_process_timeout(
+        completion = _chat_completion_with_process_timeout(
             "CandidateAgent LLM candidate generation",
             llm,
             [
@@ -2313,16 +2372,34 @@ Important:
                 {"role": "user", "content": prompt},
             ],
             0.5,
+            agent="CandidateAgent",
+            stage="candidate",
+            purpose="candidate_strategy_generation",
         )
+        content = completion["content"]
+        model_usage_records.append(completion["model_usage_record"])
         if content.startswith("```"):
             content = content.split("```", 2)[1].replace("json", "", 1).strip()
         payload = json.loads(content)
         if not isinstance(payload, dict):
             raise ValueError("candidate payload is not a JSON object")
     except Exception as exc:
+        if not model_usage_records:
+            model_usage_records.append(
+                build_model_usage_record(
+                    agent="CandidateAgent",
+                    stage="candidate",
+                    purpose="candidate_strategy_generation",
+                    provider=llm,
+                    model=AVAILABLE_LLMs[llm]["model"],
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
         payload = fallback
         payload["note"] = f"Candidate generation fallback used: {type(exc).__name__}: {exc}"
     payload.setdefault("stage", "candidate_generation")
+    payload["_model_usage_records"] = model_usage_records
     return _apply_data_capability_audit_to_candidates(payload, data_profile)
 
 
@@ -2936,6 +3013,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--synthetic-data", action=argparse.BooleanOptionalAction, default=default_synthetic)
     parser.add_argument("--synthetic-n", type=int, default=int(os.getenv("YIELD_SYNTHETIC_N", "800")))
     parser.add_argument("--query", action="append", default=None, help="Additional external-search query. Can be passed multiple times.")
+    parser.add_argument(
+        "--champion-policy",
+        choices=("mixed", "llm_only"),
+        default=os.getenv("YIELD_CHAMPION_POLICY", "mixed"),
+        help="Whether fixed families may win or remain comparison-only.",
+    )
     return parser.parse_args()
 
 
@@ -2963,6 +3046,7 @@ class YieldAgentManager:
         self.operation_instructions = ""
         self.manager_revision_round = 0
         self.revision_notes: list[dict[str, Any]] = []
+        self.model_usage_records: list[dict[str, Any]] = []
 
     def _current_random_state(self) -> int:
         return int(self.args.random_state) + int(self.manager_revision_round)
@@ -3286,6 +3370,7 @@ class YieldAgentManager:
             repair_memory_context=repair_memory_context,
             session_context=session_context,
         )
+        self.model_usage_records.extend(self.candidate_report.pop("_model_usage_records", []) or [])
         self.candidate_report["manager_revision_round"] = self.manager_revision_round
         if manager_feedback:
             self.candidate_report["manager_feedback"] = manager_feedback
@@ -3453,6 +3538,7 @@ class YieldAgentManager:
             repair_memory_context=repair_memory_context,
             session_context=session_context,
         )
+        self.model_usage_records.extend(self.model_plan.pop("_model_usage_records", []) or [])
         self.model_plan["manager_revision_round"] = self.manager_revision_round
         if manager_feedback:
             self.model_plan["manager_feedback"] = manager_feedback
@@ -3598,7 +3684,7 @@ class YieldAgentManager:
             ],
         }
 
-    def _obtain_yield_plugin_source(self) -> tuple[str, str, list[str]]:
+    def _obtain_yield_plugin_source(self) -> tuple[str, str, list[str], list[dict[str, Any]]]:
         """Return (plugin_source, source_origin, logs).
 
         source_origin == 'llm' when the LLM produced a preflight-valid plugin;
@@ -3617,14 +3703,24 @@ class YieldAgentManager:
                 n_attempts=max(1, int(self.args.operation_attempts)),
             )
             if gen.get("ok") and gen.get("plugin_source"):
-                return str(gen["plugin_source"]), "llm", list(gen.get("error_logs") or [])
+                return (
+                    str(gen["plugin_source"]),
+                    "llm",
+                    list(gen.get("error_logs") or []),
+                    list(op.model_usage_records),
+                )
             logs = list(gen.get("error_logs") or []) + [
                 "LLM plugin generation did not yield a valid plugin; using deterministic reference plugin."
             ]
         except Exception as exc:
             logs = [f"LLM plugin generation raised: {type(exc).__name__}: {exc}; using reference plugin."]
         ref_path = Path(__file__).resolve().parent / "operation_agent" / "yield_reference_plugin.py"
-        return ref_path.read_text(encoding="utf-8"), "reference_fallback", logs
+        return (
+            ref_path.read_text(encoding="utf-8"),
+            "reference_fallback",
+            logs,
+            list(op.model_usage_records) if "op" in locals() else [],
+        )
 
     def _run_plugin_harness(self) -> dict[str, Any]:
         """Primary yield execution path: LLM-authored constrained plugin executed
@@ -3640,7 +3736,8 @@ class YieldAgentManager:
             else None
         )
 
-        plugin_source, source_origin, gen_logs = self._obtain_yield_plugin_source()
+        plugin_source, source_origin, gen_logs, usage_records = self._obtain_yield_plugin_source()
+        self.model_usage_records.extend(usage_records)
 
         def _run(source: str, origin: str) -> dict[str, Any]:
             return execute_plugin_candidate_artifacts(
@@ -3689,6 +3786,7 @@ class YieldAgentManager:
                 f"Structured plugin harness accepted (candidate_source={result.get('candidate_source')}).",
                 mirror=False,
             )
+        result["model_usage_records"] = list(self.model_usage_records)
         return result
 
     def _mechanism_brief(self, spec: dict[str, Any]) -> str:
@@ -3794,6 +3892,8 @@ class YieldAgentManager:
             mech_by_id[YODEL.id] = YODEL
             audit.append({"searched_id": None, "mechanism_id": YODEL.id, "origin": "seed_default"})
             logs.append("No searched mechanism available; using YODEL seed as the mechanism arm.")
+        if op is not None:
+            self.model_usage_records.extend(op.model_usage_records)
         return mechanisms, mech_by_id, audit, logs
 
     def _obtain_searched_models(self, model_specs, sample_x, y_sample, fixed_family_ids):
@@ -3868,6 +3968,8 @@ class YieldAgentManager:
                     logs.append(f"could not persist model source for {got.id}: {exc}")
             audit.append(entry)
 
+        if op is not None:
+            self.model_usage_records.extend(op.model_usage_records)
         return model_ids, model_by_id, audit, logs
 
     def _plan_free_search_materialization(
@@ -4171,6 +4273,7 @@ class YieldAgentManager:
             fusion_specs=materialization.get("selected_fusion_specs")
             or candidate_report.get("candidate_fusion_specs", []) or None,
             n_splits=5, random_state=self._current_random_state(), min_anchor_r2=0.0,
+            champion_policy=str(getattr(self.args, "champion_policy", "mixed") or "mixed"),
         )
         result["random_state"] = self._current_random_state()
         result["base_random_state"] = int(self.args.random_state)
@@ -4184,6 +4287,7 @@ class YieldAgentManager:
         op_result["search_timing"] = result.get("timing")
         op_result.setdefault("error_logs", []).extend(gen_logs)
         op_result.setdefault("error_logs", []).extend(model_logs)
+        op_result["model_usage_records"] = list(self.model_usage_records)
 
         verification = verify_free_search_run(
             str(self.run_dir), started_at=started, anchor_expected=anchor_expected

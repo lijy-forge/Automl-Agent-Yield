@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>YieldMind 实验工作台</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260920-6">
+  <link rel="stylesheet" href="/static/app.css?v=20260922-1">
 </head>
 <body>
   <header class="app-header">
@@ -37,6 +37,7 @@
         <div class="field-grid">
           <div><label for="domain-llm">LLM Provider</label><select id="domain-llm"><option value="ark" selected>Ark / DashScope</option><option value="openai">OpenAI</option><option value="custom">Custom</option></select></div>
           <div><label for="execution-mode">执行模式</label><select id="execution-mode"><option value="free_search" selected>Free Search</option><option value="plugin">Plugin</option><option value="llm_freeform">LLM Freeform</option></select></div>
+          <div><label for="champion-policy">冠军候选范围</label><select id="champion-policy"><option value="llm_only" selected>仅 LLM 生成模型</option><option value="mixed">固定 + LLM 混合</option></select></div>
           <div><label for="revision-rounds">Manager 修订轮次</label><input id="revision-rounds" type="number" min="0" max="5" value="1"></div>
           <div><label for="operation-attempts">执行修错次数</label><input id="operation-attempts" type="number" min="1" max="10" value="3"></div>
         </div>
@@ -130,7 +131,7 @@
 
       <section class="workspace-section pipeline-section">
         <div class="section-heading">
-          <div><h3>StateGraph 执行轨迹</h3><p id="pipeline-summary">等待运行数据</p></div>
+          <div><h3>StateGraph 节点与路由</h3><p id="pipeline-summary">等待运行数据</p></div>
           <span class="section-meta" id="workflow-backend">--</span>
         </div>
         <div class="pipeline" id="pipeline"><div class="empty-panel">运行后显示节点状态、修复回环和终止结果。</div></div>
@@ -155,9 +156,10 @@
 
       <section class="workspace-section domain-overview" id="domain-overview" hidden>
         <div class="section-heading">
-          <div><h3>领域工作流结果</h3><p>展示审批、Operation 执行、Manager review 与修订闭环，不使用离线模型指标占位。</p></div>
+          <div><h3>领域工作流结果</h3><p>集中展示最终模型、受控执行、修订恢复、模型调用与关键产物。</p></div>
           <span class="section-meta" id="domain-result-mode">--</span>
         </div>
+        <div class="decision-layout domain-model-result" id="domain-model-result"><div class="empty-panel">暂无最终模型结果</div></div>
         <div class="decision-layout" id="domain-decision-audit"><div class="empty-panel">暂无领域运行结果</div></div>
       </section>
 
@@ -178,6 +180,6 @@
     </main>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=20260921-1"></script>
+  <script src="/static/app.js?v=20260922-2"></script>
 </body>
 </html>

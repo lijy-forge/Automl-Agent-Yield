@@ -696,6 +696,7 @@ def run_joint_search(
     random_state: int = 42,
     min_anchor_r2: float = 0.0,
     oof_tol_frac: float = 0.02,
+    champion_policy: str = "mixed",
 ) -> dict[str, Any]:
     """Score every candidate the same way, rank by OOF RMSE, pick a champion.
 
@@ -704,6 +705,9 @@ def run_joint_search(
     champion is drawn from the viable-and-beats-baseline pool; on near-ties in OOF
     RMSE (within `oof_tol_frac`) the smaller OOF-anchor generalization gap wins.
     """
+    champion_policy = str(champion_policy or "mixed").strip().lower()
+    if champion_policy not in {"mixed", "llm_only"}:
+        raise ValueError("champion_policy must be 'mixed' or 'llm_only'")
     df, meta = load_yield_dataframe(data_path)
     feature_columns = _feature_columns(meta, df)
     y = pd.to_numeric(df[TARGET_COLUMN], errors="coerce").to_numpy(float)
@@ -806,6 +810,11 @@ def run_joint_search(
 
     # annotate every candidate with the guardrail verdict + generalization gap
     for r in evaluated:
+        model_origin = str((r.get("spec") or {}).get("model_origin") or "fixed_family")
+        r["champion_eligible"] = champion_policy == "mixed" or model_origin == "llm_model"
+        r["champion_exclusion_reason"] = (
+            None if r["champion_eligible"] else "fixed_family_is_comparison_only"
+        )
         a_r2 = _r2(r.get("anchor_metrics"))
         o_r2 = _r2(r.get("oof_metrics"))
         if best_baseline_rmse is None or baseline_improvement_threshold is None:
@@ -854,19 +863,32 @@ def run_joint_search(
         "slowest_candidates": slowest,
     }
 
-    # champion pool: viable AND significantly beats baseline; degrade gracefully
-    # but keep "ties baseline" distinct from true improvement.
-    pool = [r for r in ranked if r["viable"] and r["beats_baseline"]]
-    pool_basis = "viable_and_beats_baseline"
+    eligible_ranked = [r for r in ranked if r.get("champion_eligible")]
+    # Fixed families remain in the common ranking under llm_only, but only
+    # generated models may enter the champion pool. Unlike mixed mode, llm_only
+    # never degrades to a generated model that loses to the fixed baseline.
+    pool = [r for r in eligible_ranked if r["viable"] and r["beats_baseline"]]
+    pool_basis = (
+        "llm_only_viable_and_beats_baseline"
+        if champion_policy == "llm_only"
+        else "viable_and_beats_baseline"
+    )
     if not pool:
-        pool = [r for r in ranked if r["viable"] and r.get("ties_baseline")]
-        pool_basis = "viable_and_ties_baseline"
-    if not pool:
-        pool = [r for r in ranked if r["viable"]]
-        pool_basis = "viable_only"
-    if not pool:
-        pool = ranked
-        pool_basis = "no_candidate_passed_guardrail"
+        pool = [r for r in eligible_ranked if r["viable"] and r.get("ties_baseline")]
+        pool_basis = (
+            "llm_only_viable_and_ties_baseline"
+            if champion_policy == "llm_only"
+            else "viable_and_ties_baseline"
+        )
+    if champion_policy == "mixed":
+        if not pool:
+            pool = [r for r in eligible_ranked if r["viable"]]
+            pool_basis = "viable_only"
+        if not pool:
+            pool = eligible_ranked
+            pool_basis = "no_candidate_passed_guardrail"
+    elif not pool:
+        pool_basis = "no_acceptable_llm_candidate"
 
     best_oof_row = ranked[0] if ranked else None
     champion = pool[0] if pool else None
@@ -900,6 +922,8 @@ def run_joint_search(
             "baseline_improvement_threshold": r.get("baseline_improvement_threshold"),
             "viable": r.get("viable"),
             "viability_reason": r.get("viability_reason"),
+            "champion_eligible": r.get("champion_eligible"),
+            "champion_exclusion_reason": r.get("champion_exclusion_reason"),
         }
 
     def _research_score(r: dict[str, Any]) -> tuple[Any, ...]:
@@ -932,7 +956,12 @@ def run_joint_search(
     selected_differs_from_best_oof = bool(
         best_oof_row is not None and champion is not None and best_oof_row.get("name") != champion.get("name")
     )
-    if champion is None:
+    if champion is None and champion_policy == "llm_only":
+        selection_explanation = (
+            "仅 LLM 生成模型具备冠军资格，但没有生成模型同时通过可行性护栏并至少打平固定基线；"
+            "本轮不回退固定模型。"
+        )
+    elif champion is None:
         selection_explanation = "No evaluated candidate was available, so no champion was selected."
     elif selected_differs_from_best_oof and have_anchor:
         selection_explanation = (
@@ -957,7 +986,15 @@ def run_joint_search(
         )
 
     champion_selection = {
+        "policy": champion_policy,
+        "status": (
+            "selected" if champion is not None else
+            "no_acceptable_llm_candidate" if champion_policy == "llm_only" else
+            "no_evaluated_candidate"
+        ),
         "pool_basis": pool_basis,
+        "eligible_candidate_count": len(eligible_ranked),
+        "comparison_only_candidate_count": len(ranked) - len(eligible_ranked),
         "oof_tolerance_frac": float(oof_tol_frac),
         "baseline_improvement_frac": float(baseline_improvement_frac or 0.0),
         "baseline_improvement_abs": float(baseline_improvement_abs or 0.0),
@@ -989,6 +1026,8 @@ def run_joint_search(
         "best_fixed_baseline_oof_rmse": best_baseline_rmse,
         "baseline_improvement_threshold": baseline_improvement_threshold,
         "min_anchor_r2": min_anchor_r2,
+        "champion_policy": champion_policy,
+        "selection_status": champion_selection["status"],
         "champion_pool_basis": pool_basis,
         "champion_selection": champion_selection,
         "research_champion": _public_row(research_champion),
@@ -1002,6 +1041,8 @@ def run_joint_search(
              "baseline_improvement_threshold": r.get("baseline_improvement_threshold"),
              "viable": r.get("viable"),
              "viability_reason": r.get("viability_reason"),
+             "champion_eligible": r.get("champion_eligible"),
+             "champion_exclusion_reason": r.get("champion_exclusion_reason"),
              "oof_anchor_gap_r2": r.get("oof_anchor_gap_r2"),
              "evaluation_protocol": r.get("evaluation_protocol"),
              "elapsed_seconds": r.get("elapsed_seconds")}
@@ -1254,6 +1295,7 @@ def run_free_search(
     n_splits: int = 5,
     random_state: int = 42,
     min_anchor_r2: float = 0.0,
+    champion_policy: str = "mixed",
 ) -> dict[str, Any]:
     """The direction-④ upper loop: FREE combination = the cartesian product of
     searched mechanisms x searched models x fusion modes.
@@ -1313,6 +1355,7 @@ def run_free_search(
     search = run_joint_search(
         candidates, data_path, anchor_path=anchor_path,
         n_splits=n_splits, random_state=random_state, min_anchor_r2=min_anchor_r2,
+        champion_policy=champion_policy,
     )
     evaluation_seconds = time.perf_counter() - eval_started
     timing = {
@@ -1333,6 +1376,7 @@ def run_free_search(
         "timing": timing,
         "n_splits": int(n_splits),
         "random_state": int(random_state),
+        "champion_policy": champion_policy,
         "build_errors": build_errors,
         "search": search,
         "champion": search.get("champion"),
