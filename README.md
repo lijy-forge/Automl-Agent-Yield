@@ -56,9 +56,15 @@ YieldMind upgrade layer:
 /opt/anaconda3/envs/amla/bin/python scripts/init_yieldmind_db.py
 /opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_eval.py
 /opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_retrieval_eval.py
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_recovery_eval.py
+/opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_repair_memory_eval.py
 /opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_function_calling_smoke.py
 /opt/anaconda3/envs/amla/bin/python scripts/run_yieldmind_api.py --port 8070
 ```
+
+面试和简历中的数字口径、证据位置与不可外推边界，统一记录在
+[`YieldMind_Interview_Claims.md`](YieldMind_Interview_Claims.md)。其中
+`16.7% -> 83.3%`是30条离线受控故障注入任务的工作流完成率，不是LLM代码修复率。
 
 The live domain StateGraph is deliberately opt-in because CandidateAgent and
 ModelAgent call the configured model API:

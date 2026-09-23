@@ -132,6 +132,7 @@ celerybeat.pid
 .env
 .venv
 .venv-qwen3/
+.runtime/
 env/
 venv/
 ENV/
@@ -224,6 +225,12 @@ knowledge_sources/literature/documents/
 # 上游项目主页静态资源（非本人代码，约 20MB）
 static/
 index.html
+!yieldmind/static/
+!yieldmind/static/**
 
 # 上游 WizardLAMP LoRA 训练语料（非本人代码，约 16MB，运行时不需要）
 prompt_agent/WizardLAMP/*.jsonl
+
+# Local/intermediate review imports; finalized review artifacts are tracked explicitly.
+evals/review/1.csv
+evals/review/yieldmind_retrieval_review_reviewer_3.csv

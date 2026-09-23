@@ -1,6 +1,6 @@
 # YieldMind Agent Upgrade Plan
 
-更新时间：2026-09-18
+更新时间：2026-09-21
 
 ## 输入审计
 
@@ -26,6 +26,121 @@
 | 安全与证据约束 | 脱敏、上下文预算、引用可校验 | 原主流程有部分 guardrails，但缺统一工具层安全控制 | 新增 `redact_sensitive_payload`、`plan_token_budget`、`validate_evidence_refs`，工具调用日志入库前统一脱敏 |
 | 展示 | 可查看工具、运行和事件 | 原 Flask 页面服务于旧主流程 | 新增 FastAPI 静态展示页，保留原 Flask dashboard |
 | 领域算法和上游说明 | 保留 AutoML-Agent 上游说明和屈服应力领域算法 | README 已说明上游 AutoML-Agent 和活跃模块 | 不移除原有领域模块；新增层只做包装 |
+
+## 面试重点：从 Manager Agent 到 LangGraph 混合编排
+
+### 一句话结论
+
+前后两种流程确实不一样，但不是“用 LangGraph 删除 Manager Agent”。当前领域主流程采用的是**混合编排**：LangGraph 负责可控、可恢复、可审计的外层流程，原 `YieldAgentManager` 继续负责领域上下文、执行前审批、review、revision feedback 和终止判断，各专业 Agent/工具负责具体执行。也就是说，Manager 从“唯一流程控制器”变成了“受图约束的领域协调者”。
+
+### 前后模式对比
+
+| 维度 | 原始 Manager 中心模式 | 当前离线工作流 | 当前领域工作流 |
+| --- | --- | --- | --- |
+| 核心入口 | `YieldAgentManager.run()` | `YieldMindWorkflow` | `YieldDomainWorkflow` |
+| 谁控制下一步 | Manager 内部的 Python 命令式流程 | StateGraph 的固定节点和条件边 | StateGraph 规定合法路径，Manager 提供领域决策和反馈 |
+| Agent 形态 | Manager 调用多个内部方法和 `OperationAgent` | 围绕 Tool Registry 的逻辑角色，不默认调用真实 LLM | 通过 `RealYieldDomainAdapter` 恢复并复用原 Manager/Agent 实现 |
+| 状态管理 | 主要保存在进程内对象和 JSON 产物中 | 显式 graph state | 可序列化 graph state + 既有 JSON 产物；节点执行时恢复 Manager 上下文 |
+| 回环与终止 | 写在 `run()` 的条件分支和循环里 | 显式条件边 | review 失败后在预算内回到 Candidate/Model；取消走显式 `cancel` 节点 |
+| 可观测性 | 主要看到整段运行和最终产物 | 可记录每个节点、工具调用和产物 | 可区分图路由、Manager 决策、专业 Agent 行为和 Operation 执行 |
+| 恢复与取消 | 粒度偏整段流程 | 节点边界取消和持久化 | 节点级轨迹、任务租约、取消、恢复；Operation 支持进程组终止 |
+| 当前验证边界 | 原有领域流程 | 确定性离线流程已验证 | 已完成单次显式授权的真实 LLM 端到端通过验收；未形成生产成功率统计 |
+
+原流程可以概括为：
+
+```text
+用户任务
+  -> YieldAgentManager.run()
+     -> Data/Search/Candidate/Model/Operation
+     -> Review
+     -> Manager 内部决定是否修订或结束
+```
+
+当前领域流程可以概括为：
+
+```text
+用户任务
+  -> LangGraph（合法状态、条件边、预算、取消和恢复）
+     -> Manager（领域上下文、审批、反馈和终止判断）
+        -> Candidate / Model / Operation 等专业执行单元
+     -> Review
+     -> LangGraph 校验后回环、取消或结束
+```
+
+### 为什么没有删除 Manager Agent
+
+Manager 仍然有价值，因为图只能表达“允许怎么走”，不能天然替代“结合实验目标判断应该怎么走”。当前保留下来的 Manager 职责主要包括：
+
+- 维护实验需求、数据上下文和跨节点领域信息。
+- 在执行前做审批和约束检查。
+- 接收 review 结果，形成 revision feedback，并判断是否继续修订。
+- 在预算、质量和终止条件之间做领域层决策。
+
+变化在于：Manager 不再拥有无限制地调用任意 Agent、无限循环或绕过取消状态的权力。所有决策都必须经过图中合法边、前置条件和预算校验。因此这不是弱化智能，而是把“智能决策”和“工程控制”分层。
+
+需要准确说明的是，原项目虽然叫 Manager Agent，但外层调度也主要由 Python 条件分支实现，并不是每一步都由 LLM 自由规划；当前版本也还不是一个可以任意动态选择所有 Agent 的自由路由器。
+
+### 为什么引入 LangGraph
+
+LangGraph 的主要优势不是让模型更聪明，而是让多 Agent 系统更可靠：
+
+- **显式状态机**：合法节点、条件边、回环路径和终止条件可以直接检查。
+- **有界回环**：review 失败只能在 revision budget 内回到 Candidate/Model，避免无限自我修订。
+- **节点级可观测**：可以记录每个节点的输入摘要、输出、耗时、错误和产物，而不是只看到 Manager 的最终结果。
+- **取消与故障隔离**：在节点边界检查取消；Operation 节点还可终止整个受控进程组。
+- **恢复与重放**：状态和产物路径可持久化，失败后可以判断从哪里恢复，而不是重跑整个黑盒流程。
+- **测试更容易**：可以单独测试路由、节点、review 回环和异常分支，不依赖完整真实 LLM 链路。
+- **适配异步任务**：更容易与 PostgreSQL、Redis、Celery 的任务状态、租约和幂等协议对齐。
+
+如果只是把 `YieldAgentManager.run()` 整体包装成一个 LangGraph 节点，那么内部仍然是黑盒，得不到节点级 checkpoint、条件边、取消、恢复和审计能力，所以本项目没有采用这种“形式上用了图、实质仍是单体 Manager”的做法。
+
+### 代价与边界
+
+- 流程自由度下降：新增分支通常要修改图、状态 Schema 和路由校验。
+- 工程复杂度上升：需要同时维护 graph state、事件、checkpoint、任务状态和领域产物的一致性。
+- LangGraph 节点不等于独立智能体：当前 CandidateAgent、ModelAgent 仍是 `YieldAgentManager` 的领域方法，`OperationAgent` 才是独立类；离线工作流中的 Agent 更多是逻辑角色。
+- 已执行带真实 API 凭据的 Candidate/Model/Operation 链路：首次运行暴露 Operation 大结果队列回传死锁，修复后`run_6f40a7d9d715`端到端`passed`。这是一次真实验收，不是多样本效果评测，面试时不能把它外推为生产完成率。
+
+### 当前落地形态
+
+当前没有退回纯 Manager 模式，而是在现有混合架构上增加了结构化 `DomainManagerRouter`。Manager 产生下一位执行者的结构化决策，LangGraph 继续负责校验和执行合法路由：
+
+```json
+{
+  "next_agent": "CandidateAgent",
+  "reason_code": "review_requires_revision",
+  "feedback": "重新限制 phi_m 并执行消融",
+  "remaining_revision_budget": 1
+}
+```
+
+每条决策实际保存 `next_node`、`next_agent`、`reason_code`、`feedback`、`remaining_revision_budget`、`allowed_next_nodes` 和 `validated`。图只接受合法集合内的下一节点，并在决策时检查失败、取消、review 结果和修订预算。这样既保留 Manager 的领域判断，又不会牺牲系统的确定性边界。前端事件层已经区分 `manager_decision` 与 `agent_progress`，可以分别展示 StateGraph 路由、Manager 决策和专业 Agent 行为。
+
+### 面试回答模板
+
+#### 30 秒版
+
+> 我们前后两版的控制流确实发生了变化。原来是 Manager Agent 通过一段命令式流程直接串联各 Agent；现在采用 LangGraph 加 Manager 的混合编排。LangGraph 负责状态、合法路由、回环预算、取消和恢复，Manager 仍负责需求理解、执行审批、review 反馈和终止判断。这样做不是删除 Manager，而是把领域决策与工程控制解耦，使流程更可观测、可测试和可恢复。代价是图和状态 Schema 的维护成本更高，自由度也受到约束。
+
+#### 2 分钟版
+
+> 原版系统以 `YieldAgentManager.run()` 为中心，Data、Search、Candidate、Model 和 Operation 的调用顺序、review 以及 revision loop 都写在 Manager 的 Python 控制流中。它的优点是实现直接、动态上下文集中，但缺点是流程偏黑盒：节点级状态、取消、恢复、回环预算和行为审计都不够明确。
+>
+> 迁移后，我们没有把 Manager 删除，也没有重写原有领域算法，而是采用 LangGraph 作为外层控制面。图明确规定 `prepare -> data -> requirements -> search -> candidate -> model -> pre_execution -> operation -> review` 等合法路径，并处理取消、失败和有界修订；每个节点通过适配器恢复原 Manager 的上下文，继续复用它的需求管理、审批、review 和反馈能力。OperationAgent 也保留原有职责，并增加了进程组级终止协议。
+>
+> 这个设计的核心是职责分离：LangGraph 回答“系统允许怎么走”，Manager 回答“基于领域结果应该怎么走”，专业 Agent 回答“具体任务怎么执行”。它提高了可观测性、测试性、恢复能力和生产安全性。当前结构化 ManagerRouter 已经输出 `next_agent`、原因、反馈和剩余预算，再由图校验后执行；Manager 决策和专业 Agent 行为也使用不同事件类型输出。真实 LLM 领域链路已有单次端到端通过验收，但还不足以形成真实模型完成率；`16.7%→83.3%`只来自不调用LLM的30条受控故障恢复A/B。
+
+### 常见追问与着重回答
+
+**问：为什么不保留纯 Manager Agent？** 纯 Manager 适合快速原型，但一旦接入异步任务、取消、恢复和人工审计，隐藏在 `run()` 内的控制流很难可靠管理。混合模式保留了 Manager 的领域判断，同时给它加上可验证的工程边界。
+
+**问：LangGraph 会让 Agent 更智能吗？** 不会直接提升模型智能。它提升的是流程可靠性、可解释性和可运维性；模型质量仍取决于提示词、工具、数据、检索和评测。
+
+**问：现在每个节点都是独立 Agent 吗？** 不是。当前既有 CandidateAgent、ModelAgent 主要是 Manager 内的方法，OperationAgent 是独立类；离线工作流的一些 Agent 名称表示职责角色。面试时应区分“图节点”“Agent 角色”和“独立运行服务”。
+
+**问：为什么不把原 Manager 整体作为一个图节点？** 那只能获得一个粗粒度外壳，内部仍无法节点级 checkpoint、路由审计和取消，也无法针对 review 回环做独立测试。
+
+**问：当前方案最值得强调的工程价值是什么？** 是把动态决策约束在一个可恢复、可审计的状态机中，同时复用原有领域实现，降低重写风险；不是单纯把框架名称从 Manager 换成 LangGraph。
 
 ## 阶段进度
 
@@ -75,12 +190,27 @@
 
 ### 阶段 4：评测与展示
 
-- 状态：已完成初版。
+- 状态：FastAPI实验工作台第一轮重构已完成；Next.js未引入。
 - 产物：
   - `yieldmind/static/index.html`
+  - `yieldmind/static/app.css`
+  - `yieldmind/static/app.js`
   - `tests/test_yieldmind_core.py`
 - 评测指标：工具调用是否成功、失败样本是否被拒绝、隔离执行是否通过、是否产生真实报告。
 - 注意：这些是 Agent 工具层回归结果，不是最终研究模型效果。
+- 展示改造：
+  - 主视图从后端按钮/原始JSON控制台改为实验运行工作台，展示全局最终推荐模型的OOF指标、实际值/预测值散点图、候选策略排名、固定基线、选择审计、StateGraph节点、产物和逐步Trace。
+  - 候选与固定基线都可成为最终推荐；图表最多展示200条获胜模型OOF预测，只使用真实交叉验证预测，不生成前端模拟点。
+  - 增加由工作流真实节点事件驱动的多Agent活动区；DataAgent、SearchAgent、ModelAgent、CandidateAgent、ReviewAgent、ReportAgent与Agent Manager分别显示当前节点、执行状态和时间，历史运行则由已持久化stage重建，不使用前端定时假进度。
+  - 默认载入并明确标记200行增强演示CSV；增加10 MB上限的CSV上传入口，文件只写入受控目录，并在运行前使用现有屈服应力Schema校验有效行和目标列。
+  - Redis任务取消/恢复和Tool Registry保留在次级区域；Redis不可用时前端明确禁用队列操作，同步离线工作流仍可运行。
+- 真实验证：
+  - FastAPI根页面、CSS和JS均经真实HTTP返回`200`；浏览器完成健康、工具、运行列表及最近运行结果加载。
+  - 60样本/3折真实HTTP离线工作流返回`passed`，9个StateGraph节点全通过；展示3个候选、4个固定基线、OOF预测点和9类产物，`real_llm_calls=0`。
+  - 默认200行增强CSV经真实FastAPI流式运行返回`passed`（`run_316bb843f863`）；收到18条节点开始/结束事件、9个阶段和200条获胜模型OOF预测点，`real_llm_calls=0`。候选`strategy_hgb_packing_sp`的OOF RMSE/R2为`3.7748/-0.0031`，固定`baseline_ridge_linear`为`0.3193/0.9928`；页面、JSON报告和Markdown报告均最终推荐Ridge基线，不再只做降级警告。
+  - `/api/data/default`对默认文件返回200行、72列和`yield_stress`目标列；同一文件经上传接口复验成功，非CSV扩展名在接口测试中返回400。
+  - 局部验收发现Chroma过滤后的向量数少于请求数会返回500；现按过滤后的真实向量数量限制`n_results`，同一Top-5知识查询复验返回`200`。
+  - 完整自动化回归：`98 passed`；现有warning来自Chroma/Pydantic弃用提示、joblib核心数探测和sklearn收敛提示，不计为测试通过率提升。
 
 ### 阶段 5：LangGraph 与 Function Calling 适配
 
@@ -398,7 +528,7 @@
 
 ### 阶段 21：检索Bad Case可解释性与BM25Plus候选修正
 
-- 状态：实现与真实Qwen复验已完成；第二人标签复核尚未完成，因此未引入reranker、未切换默认embedding。
+- 状态：实现与真实Qwen复验、双人独立标注、24条分歧裁决和最终Gold Label均已完成；固定Gold上的Qwen embedding余弦重排消融已完成且结果退化，cross-encoder对照尚未完成，默认检索未变。
 - 问题核查：
   - 原评测只保存命中名次和第一来源，无法区分未召回、正确文档错误chunk排前、目标词跨chunk等原因，不能据此合理决定增加reranker。
   - 候选诊断发现`BM25Plus`的delta使零query-token重叠chunk也获得正分；原`score > 0`过滤会让这些无关候选进入RRF。这是检索逻辑问题，不是模型能力问题。
@@ -409,13 +539,13 @@
 - 真实验证：
   - 修复后30条Qwen真实评测：vector=`0.9667/0.7789/0.6667/538.2ms`，BM25+=`0.8000/0.8000/0.8000/3.0ms`，hybrid=`1.0000/0.8861/0.8000/444.5ms`，依次为Recall@5/MRR/Top-1/单次平均延迟。
   - 对比修复前，hybrid Recall@5不变，MRR增加`0.0222`、Top-1增加`0.0333`；只有`safety_redaction`从第3升至第1，未选择性删除其他Bad Case。
-  - 剩余6个hybrid Top-1 mismatch的正确chunk都在前4；其中2个是正确文档的其他chunk先返回，另外4个为其他来源先返回。全部仍需第二人复核可接受来源。
+  - 旧自动标签下剩余6个hybrid Top-1 mismatch；双人裁决后的最终人工标签确认5个Top-1 Bad Case，其中4个为正确片段已在Top-5的排序问题，1个为Top-5内无直接相关片段。
   - 完整本地报告：`agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_114855.json`；Git精简结果：`evals/results/yieldmind_qwen3_retrieval_diagnostics_20260918.json`。
-  - 决策：当前不增加reranker。先扩大真实用户查询并完成独立标签复核，再在固定case上比较收益和延迟，避免对单人自建标签过拟合。
+  - 决策：不启用Qwen embedding余弦重排；它在最终人工Gold上降低MRR、Top-1和nDCG。正式cross-encoder仍需独立实测，不能用该消融替代。
 
 ### 阶段 22：分块版本一致性与盲审标注包
 
-- 状态：分块/RRF稳定性修正、盲审工具和`reviewer_1`中英对照空白标注包已完成；150行人工标签尚未填写，第二标注人及争议裁决尚未开始。
+- 状态：已完成分块/RRF稳定性修正、盲审工具、两份各150行的独立人工标注、一致性分析、24条分歧裁决及最终Gold Label生成。
 - 执行前核查：
   - 真实检索使用`chunk_size=700/chunk_overlap=80`，旧报告却固定记录`recursive_chars_1200_180_v1`；文本和阶段21指标未因此变化，但索引身份与复现说明不正确。
   - 修正分块版本后首次复跑发现一个RRF平分case会随chunk ID哈希换序；根因是平分时使用不具语义的chunk ID排序，而不是Qwen推理变化。
@@ -425,10 +555,16 @@
   - 新增`scripts/prepare_yieldmind_retrieval_review.py`及Pydantic行Schema；候选和case固定随机打乱，公开CSV不含来源、排名、分数和原标签，私有映射保存在Git忽略目录。
   - 已生成`evals/review/yieldmind_retrieval_review_reviewer_1.csv`和说明`evals/review/README.md`；30个问题按case ID、20个唯一候选chunk按固定hash映射提供中文辅助译文，英文原文仍是裁决依据。
   - 脚本默认拒绝覆盖已存在CSV；只有显式指定时才能重建完全未标注的表，任一标签或备注存在时均拒绝覆盖。
+  - 新增`scripts/analyze_yieldmind_retrieval_reviews.py`，校验行集合、候选文本哈希和不可编辑字段，并生成分标注者指标、一致性统计及空白裁决表；分析不改写任一原始CSV。
+  - 新增`scripts/finalize_yieldmind_retrieval_review.py`，重新计算原始分歧后校验裁决表保护字段、标签和说明，输出150行最终Gold Label、最终指标及Top-1 Bad Case；不信任或覆盖原始标注。
 - 真实验证：
   - 最终Qwen报告为`agent_workspace/yieldmind/retrieval_evals/retrieval_eval_20260918_121005.json`，SHA-256=`3718871a6dff7f000a953169c5ded5c955a88e2c56fadabe9a0b69d4b34ff59e`。
   - 报告明确记录`recursive_chars_700_80_v1`、7篇文档/20个chunk、67次encode/80条文本；hybrid质量仍为`1.0000/0.8861/0.8000`。
-  - CSV结构检查为30个case、150行，问题和候选文本均有中英对照，150个空relevance和confidence；不存在source/rank/score列。当前只能称“双语标注包已准备”，中文机器辅助翻译不等于第二人标注，不能称“人工评测已完成”。
+  - 两份CSV均为30个case/150行且候选文本哈希全部匹配；两人relevance精确一致126/150=`84.00%`，线性加权Cohen's kappa=`0.8146`、二次加权kappa=`0.8808`，24条分歧均为相邻等级，无`0↔2`严重分歧。
+  - reviewer_1指标为Recall@5=`1.0000`、MRR=`0.9194`、Top-1=`0.8667`、nDCG@5=`0.9435`；reviewer_3分别为`1.0000/0.8972/0.8333/0.9321`。最小标签保守共识仅作为诊断，不代替逐条裁决。
+  - 第二份原始CSV误沿用`reviewer_id=reviewer_1`；报告保留原值并按输入角色统计为`reviewer_3`，未静默改写。完整结果见`evals/results/yieldmind_retrieval_dual_review_20260919.json`，24条裁决表见`evals/review/yieldmind_retrieval_review_adjudication.csv`。
+  - 24条分歧已全部裁决，其中最终标签`0`和`1`各12条；最终150条标签分布为`0:79/1:38/2:33`。Gold指标为Recall@5=`0.9667`、MRR=`0.8861`、Top-1=`0.8333`、nDCG@5=`0.9409`。
+  - 最终5个Top-1 Bad Case中，`agent_multi_role`、`data_leakage_denylist`、`eval_oof`和`safety_argv`属于排序问题；`safety_redaction`在Top-5内无直接相关候选，不能仅依赖reranker修复。最终报告见`evals/results/yieldmind_retrieval_final_gold_20260919.json`。
 
 ### 阶段 23：有界多步 Agent Loop、重复调用检测与逐步 Trace
 
@@ -497,6 +633,274 @@
   - 未做OCR，无法保证复杂表格、公式、旋转图注的无损提取；检索证据仍需回到DOI/页码核对。
   - 8篇文献只是初始语料，覆盖水泥、浆体、高固相膏与yielding liquids，不代表完整领域分布；发表年份和开放获取条件也会引入选择偏差。
 
+### 阶段 26：固定 Gold Label 重排对照
+
+- 状态：可复现评测框架和真实Qwen embedding余弦重排消融已完成；Qwen3 cross-encoder因固定版本模型尚未缓存且下载网络不可达而未执行。
+- 实现：
+  - 新增`scripts/run_yieldmind_reranker_eval.py`，严格校验Gold行、case内query和连续原始排名；平分时按原始排名稳定排序。
+  - 报告同时保存原始/重排Recall@5、MRR、Top-1、nDCG、逐case候选分数、Top-1升降、输入SHA-256、模型固定revision、推理延迟和峰值RSS。
+  - 正式Qwen3-Reranker采用官方yes/no causal-LM打分协议并默认禁止下载；另提供已缓存Qwen3-Embedding余弦重排作为明确标注的bi-encoder消融，二者不会混称。
+- 真实结果：
+  - 固定输入为最终人工Gold的30个case/150个Top-5候选；原始指标Recall@5=`0.9667`、MRR=`0.8861`、Top-1=`0.8333`、nDCG@5=`0.9409`。
+  - 已缓存`Qwen/Qwen3-Embedding-0.6B@97b0c614...`在CPU真实编码30个唯一query和20个唯一原文chunk；推理`27.7413s`，按150对摊销`184.94ms/pair`，峰值RSS约`3.46GB`，`real_llm_calls=0`。
+  - 余弦重排后Recall@5不变，MRR降至`0.8389`、Top-1降至`0.7667`、nDCG@5降至`0.8921`；5个case更换Top-1，没有把相关片段提升到首位，反而有2个直接相关Top-1被降级，因此明确`do_not_enable`。
+  - 完整本地报告SHA-256=`c2ca1fc53aabd35c14d7348d22f9b1ae5de216ecb7fd91b77a28002d2238daef`；Git精简结果为`evals/results/yieldmind_qwen3_embedding_cosine_rerank_20260919.json`。
+  - `Qwen/Qwen3-Reranker-0.6B@204631fe...`下载在显式授权后仍返回`No route to host`；未产生或伪造cross-encoder指标，默认检索保持不变。
+
+### 阶段 27：候选与固定基线的全局选择闭环
+
+- 状态：已完成。候选冠军不再自动等于最终推荐，固定基线可在同协议OOF指标更好时获胜。
+- 公平性修正：
+  - 固定基线与候选统一以OOF RMSE选择；不再用基线折均RMSE与候选OOF RMSE混比。
+  - 同轮候选使用相同的KFold切分随机种子，避免策略间由不同折分配引入额外方差。
+  - 仅在评估协议一致且两侧OOF RMSE均有效时比较；协议不匹配时拒绝声称谁更好。
+  - 候选只在OOF RMSE严格更低时获胜，平局选更简单的固定基线。
+- 端到端接线：`final_selection`进入benchmark产物、workflow stage payload、最终JSON/Markdown报告和前端工作台；固定基线新增最多200条OOF预测预览，因此基线获胜时散点图仍显示真实OOF点。
+- 默认数据实测：候选相对Ridge基线的OOF RMSE增加`3.4555`，最终选择`baseline_ridge_linear`；选择原因、双方指标和获胜预测点均在结果中可审计。
+
+### 阶段 28：结构感知分块与检索路由
+
+- 状态：第一阶段已完成；新旧分块算法均可复现，现有本地hashing知识库已重建为`section_aware_v4`。
+- 分块实现：
+  - 保留`recursive_chars_v3`作为历史对照，新增`section_aware_v4`；代码、表格和公式作为原子块，普通内容按标题/段落/句子分块。
+  - chunk持久化`parent_id`、`chunk_role`、`token_count`、`split_version`和扩展元数据；新增SQLite增量升级和Alembic `20260919_0008`。
+  - 向量索引使用title/section/content type上下文增强文本，引用返回仍使用未注入合成头的原始证据文本。
+- 检索实现：
+  - 仍以TopK为候选选择策略；hybrid默认从vector/BM25各取`3K`后做RRF，未把不可比的cosine/BM25/RRF分数当作TopP概率。
+  - 新增`routing_mode=auto`，对project/literature进行可审计的确定性路由；无强路由证据时搜索两个corpus，路由后corpus无结果时显式降级为全库。
+  - 新增父章节展开、父块去重和总上下文字符预算；工作流与前端快速检索显式使用auto routing、parent expansion、dedup和12,000字符预算。
+- 离线快速A/B（local hashing，30条旧回归case）：补跑同参数后，`700/80 v3` hybrid为Recall@5=`0.9000`、MRR=`0.8361`、Top-1=`0.8000`，`700/80 v4`为`0.9000/0.8417/0.8000`；旧`0.8333/0.8083/0.8000`报告实际是`recursive_chars_1200_180_v1`，不再当作同参数v3基线。v4的`450/60`为`0.9000/0.8361/0.8000`，`900/120`为`0.9000/0.8417/0.8000`。该轮只用于分块候选筛选，不代替新chunk的池化人工Gold或Qwen复验；精简结果见`evals/results/yieldmind_chunking_hashing_ablation_20260919.json`。
+- 真实重建：local hashing配置下项目语料7篇/39 chunks（`700/80 v4`）、文献8篇/326 chunks（`1800/180 v4`）；corpus隔离、文献DOI/URL/页码完整性全部通过，`real_llm_calls=0`。
+
+### 阶段 29：同参数跨分块池化盲审
+
+- 状态：Top-1精简包的第一位人工评审已完成；第二位独立评审和完整168行池化评审尚未完成，因此当前是单评审快速筛选结果，不是最终Gold。
+- 对照严格限定为`recursive_chars_v3 700/80` vs `section_aware_v4 700/80`，两侧均为local hashing + hybrid TopK=5；生成器会校验报告内`split_version`和配置，不一致时直接拒绝。
+- 30个问题合计300个系统候选映射；按候选原文SHA-256在每个case内去重后为168行，其中132行被两系统共同召回，36行只属于其中一套系统。
+- 为降低人工成本，额外生成Top-1两阶段快速筛选包：30个case只需32行/人，28个case的两套Top-1原文相同，只有`agent_multi_role`和`eval_oof`各需评审两条候选。该包只能用于Top-1准确率快速筛选，不会被误用于宣称Recall@5、MRR或nDCG。
+- 公开CSV只包含问题、随机候选编号和证据文本，不包含系统身份、原排名、chunk ID或source path；两份CSV除`reviewer_id`外完全一致。私有manifest保留每套系统的排名，分析器可使用同一份Gold分别计算Recall@5、MRR、Top-1和nDCG。
+- 完整产物：`evals/review/yieldmind_chunking_review_reviewer_1.csv`、`yieldmind_chunking_review_reviewer_2.csv`、`README_chunking_pool.md`；Top-1精简产物：`yieldmind_chunking_top1_review_reviewer_1.csv`、`yieldmind_chunking_top1_review_reviewer_2.csv`、`README_chunking_top1.md`。私有排名映射位于`agent_workspace/yieldmind/retrieval_reviews/`。
+- 标注后处理已接入池化manifest：双人一致性报告和最终Gold报告会直接输出两套系统的Top-1直接相关率、差值、胜/负/平及ta例；对Top-1精简包不计算或宣称不可观测的完整Top-5质量。
+- 第一位评审结果：32行全部完成，标签分布为`2:18 / 1:7 / 0:7`，28条high confidence、4条medium confidence、14条带备注；候选原文哈希全部通过manifest校验。
+- 单评审Top-1对照：两套系统的直接相关率均为`18/30=60.0%`，至少部分相关率均为`25/30=83.3%`。28/30个case返回同一原文；`agent_multi_role`和`eval_oof`返回不同原文，但两侧都被评为`0`，因此结果为`0胜/0负/30平`、差值`0.0`。
+- 当前决策：没有观察到`section_aware_v4`相对`recursive_chars_v3`的Top-1质量收益，不能据此宣称结构感知分块提升检索效果；完整结果见`evals/results/yieldmind_chunking_top1_reviewer_1_20260921.json`。若要形成Gold和一致性指标，仍需第二位评审独立完成同一32行或继续完成完整168行池化评审。
+
+### 阶段 30：检索语料路由专项评测
+
+- 状态：已完成确定性路由用例、词边界修正、文献意图补全和持久化索引端到端复验。
+- 新增32条固定路由case：10条project、11条literature、11条混合/无强意图；评测的是语料意图和corpus过滤，不是回答语义相关性。
+- 原路由使用简单子串计数，会把`rapid`中的`api`、`redistribution`中的`redis`当作项目信号；现对拉丁词使用token边界，中文仍使用短语匹配。
+- 文献意图补全`SAOS`、`BreakPro`、`rheometer`、`shear rate`、`plug flow`、`wall slip`、`yielding liquids`、`solid volume fraction`、DOI和论文检索等当前语料的高置信表达；显式corpus过滤仍优先于auto route，平分/无信号仍搜全库。
+- 首轮30 case静态路由准确率为`0.9000`；最终32 case静态路由`32/32`，无强意图强制路由率`0`。同一批case在实际local-hashing持久化索引上检索`32/32`通过，路由后corpus纯度`1.0000`。
+- 精简结果见`evals/results/yieldmind_routing_eval_20260919.json`；完整本地报告为`agent_workspace/yieldmind/routing_evals/routing_eval_20260919_191402.json`。
+
+### 阶段 31：结构化 Manager 路由与逐 Agent 行为输出
+
+- 状态：离线/模拟领域链路实现与回归已完成；没有调用真实 LLM。
+- 新增`DomainManagerRouter`，为每次领域路由输出可序列化决策：`next_node`、`next_agent`、`reason_code`、`feedback`、`remaining_revision_budget`、`allowed_next_nodes`和`validated`。
+- 所有路由先受合法转换表约束，再交给LangGraph条件边执行；失败、取消、pre-execution审批、review通过、需要修订和预算耗尽分别使用明确原因码。路由决策在普通节点内写入state，避免依赖LangGraph条件函数中的不可持久化修改。
+- `manager_decisions`保存完整Manager决策，`route_history`保存精简路由审计；review回环会明确记录`review_requires_revision -> revision_feedback -> CandidateAgent`及剩余预算。
+- 领域节点新增`agent_progress`开始/结束事件，记录Agent、动作、attempt、耗时、状态和输出摘要；Manager路由使用独立`manager_decision`事件，避免把图路由与专业Agent执行混为一谈。
+- Agent角色按真实职责输出：Data/Search/Candidate/Model/Operation分别展示专业行为；requirements、审批、review、revision feedback、取消和结束归属Agent Manager。这里的Agent名称表示领域职责，不宣称每个角色都是独立服务。
+- 新增`POST /api/workflows/domain/stream` NDJSON入口；静态工作台事件处理器可识别Manager决策，历史结果优先从`agent_activities`恢复，并补充OperationAgent展示。
+- 验证覆盖正常直线流程、一次有界修订、Operation取消、未授权真实模型闸门、异步任务幂等和领域流式事件；全量回归`103 passed`，`real_llm_calls=0`。
+
+### 阶段 32：Agent 行为审计前端闭环
+
+- 状态：实现与自动化回归已完成；未触发真实 LLM。
+- 静态工作台新增“Agent 行为”页签，不再只显示角色卡片的最终状态；运行中和历史运行都可以展示完整行为时间线。
+- 普通Agent动作展示角色、action、attempt、开始/完成时间、耗时、输入摘要、输出摘要和工具调用；Manager路由单独展示前序节点、下一Agent、原因码、剩余修订预算、反馈和完整结构化决策。
+- 领域工作流开始事件补充当前修订轮次、剩余预算、已有产物、是否存在Manager反馈和执行模式；完成事件按白名单提取产物名、调用模式、审批结果、Operation返回码、review结论和修订反馈，避免把不可控的大对象或敏感运行状态直接输出到页面。
+- 历史领域运行优先从`agent_activities`恢复；离线历史运行则兼容既有增强`stages`。Manager决策与普通Agent进度继续使用不同事件类型，前端统计角色数、完成动作数和路由决策数。
+- 前端补充OperationAgent角色、领域阶段中文标签和行为审计响应式样式；脚本语法检查、领域工作流测试和静态控制台测试均通过。
+
+### 阶段 33：离线/领域双模式工作台与审计交互
+
+- 状态：实现、自动化回归和真实HTTP联调已完成；未执行人工分块标注，也未调用真实LLM。
+- 修复领域历史运行沿用离线指标布局的问题：前端通过`manager_args/manager_decisions/workflow_kind`识别领域结果，不再用空OOF指标和空候选表占位。
+- 离线模式继续展示OOF R²/RMSE/MAE/MAPE、候选策略和预测散点；领域模式改为展示修订轮次、Manager决策数、完成节点数、模型调用模式，以及执行前审批、Operation返回、Manager review、最后路由、修订反馈和进程控制摘要。
+- StateGraph轨迹在领域模式显示Manager修订次数和路由决策数，并统一使用中文阶段标签；加载领域历史运行时自动进入Agent行为页，离线/领域产物、Trace和原始结果仍可查看。
+- Agent行为页新增角色、事件类型和状态筛选；支持把当前真实行为事件导出为`yieldmind-agent-audit-v1` JSON，不生成或补齐不存在的Agent事件。
+- 响应式布局补充行为筛选工具栏，小屏下自动纵向排列；离线与领域模式共享同一套安全转义和结构化详情组件。
+- 真实FastAPI HTTP验收：根页面、JS、CSS、health和默认数据均返回200；20样本/2折离线流式运行`run_d59daa7b12c7`返回18条真实`agent_progress`、7个Agent角色、9个阶段和最终`passed`。本机没有Playwright/Chromium，因此该验收不宣称浏览器截图通过。
+
+### 阶段 34：前端回归真实领域 Agent 与 Redis 连通
+
+- 状态：已完成真实链路切换、Redis连通、前端状态收敛和一次显式授权的真实 LLM 端到端验证；验证运行因两轮 Operation 超时最终失败，没有将其粉饰为成功。
+- 前端语义修正：主按钮只调用`/api/workflows/domain/stream`，必须显式确认真实 LLM 与代码执行；确定性 sklearn 评测移到“离线基线评测（非 Agent）”，不再伪造 Data/Model/Reporter Agent 协作。
+- 角色对齐：页面只保留真实领域链路存在的`Agent Manager / DataAgent / SearchAgent / CandidateAgent / ModelAgent / OperationAgent`；去掉不存在的 ReviewAgent/ReportAgent 占位。
+- 交互合并：将“Agent状态”与“Agent行为”合并为主页滚动协作区；左侧是可筛选角色状态，右侧持续输出 Agent 动作、Manager 路由、耗时、尝试次数、输入/输出摘要和审计详情，支持自动滚动和 JSON 导出。
+- 状态闭环：最终结果会将残留`running`收敛为`passed/failed/cancelled`，未调用角色标记`skipped`；历史运行如果 Operation `rcode != 0`或`timed_out=true`，前端会纠正旧事件中的假`passed`。
+- 细粒度可观测性：Operation 子进程的代码生成、preflight拒绝、fallback、重试、源码保存和 champion 选择会写入 run-local JSONL，由父流程增量转换为`agent-activity-detail-v1`事件；细节事件进入滚动区，但不伪装成新 StateGraph 节点。
+- Redis：Docker Desktop 因`com.docker.vpnkit`后端失败无法启动容器；为避免引入 Homebrew 的大规模系统升级，在`.runtime/`构建 Redis 7.2.5 并仅绑定`127.0.0.1:6379`。`redis-cli PING=PONG`，且`/health/dependencies` 返回`redis.ok=true`。
+- 真实运行`run_5461af410bfe`：`live_llm + langgraph_stategraph`，总耗时`1570.486s`；CandidateAgent 两轮约`123.0s/144.2s`，ModelAgent 约`40.8s/60.2s`，OperationAgent 两轮均达`600s`超时。Manager 在第一轮 review 后生成 revision feedback 并重跑 Candidate/Model/Operation，第二轮预算耗尽后以`failed`结束。运行产生多份 LLM 模型/机理源码、`free_search_report.json`、预测、champion 模型和`predict.py`，因 Operation 超时不声称端到端成功。
+- 验证：`node --check yieldmind/static/app.js`、`py_compile yieldmind/domain_workflow.py`通过；领域流程回归`10 passed`，其中新增 Operation 详细日志去重、超时失败语义和失败后 Manager review 路由测试；静态前端契约测试另行通过。
+
+### 阶段 35：Operation 大结果回传死锁修复与真实端到端通过
+
+- 根因：首次真实运行的两轮 Operation 其实已写出 champion、predictions 和成功的 round result；子进程在向`multiprocessing.Queue`回传大结果时填满管道，父进程又先等待子进程退出，因此双方互等并在600秒被误判超时。
+- 修复：`run_managed_process`在worker存活期间持续排空结果队列；收到结果后再给worker有界清理时间，如仍有子孙进程不退出则清理进程组，但不丢弃已回传结果。
+- 可观测性：Operation 滚动区新增`process_started`和`result_returned`事件，后者带真实进程状态、耗时、exitcode以及是否发送terminate/kill。
+- 回归：新增8 MB返回值用例，证明大于管道缓冲区的结果不再死锁；全量测试`107 passed`。
+- 真实验收`run_6f40a7d9d715`：`live_llm + langgraph_stategraph`，总耗时约`599.19s`；CandidateAgent=`189.86s`、ModelAgent=`45.44s`、OperationAgent=`362.22s`。Operation 回传`1,093,267`bytes的`run_result.json`，`exitcode=0`、未发送terminate/kill；Manager review=`accepted`，最终状态=`passed`。
+- 真实行为证据：3个模型代码在第一次尝试通过；3个机理代码被preflight按“phi=0归零”和“必须使用phi”约束拒绝；搜索最终从合格池选出`yodel::mod_resid_hgb::fus_mech_resid_temp#2`，Manager根据真实产物通过复核。
+
+### 阶段 36：可验证的跨任务 Repair Memory
+
+- 状态：第一版已完成。人工分块标注不是它的前置条件，两条工作可以独立进行。
+- 三态生命周期：Operation报错时只写入`candidate`；未验证候选不会被后续任务检索；只有后续Operation `rcode=0`且Manager review通过后才升级为`confirmed`。
+- 隔离与去重：按`workspace_id + execution_mode`隔离；对路径、行号、数值等易变内容归一化后生成错误指纹，同一run的同类错误幂等写入。取消操作不会记成修复经验。
+- 使用方式：已验证记忆作为独立的`repair_memory_context`传给CandidateAgent、ModelAgent和Operation的执行前检查，不会伪装成当前轮Manager feedback。
+- 存储：复用现有`yieldmind_memories`表，无需新增数据库迁移；记忆中保留错误签名、原始失败摘要、成功结果、修复建议和来源run。
+- 当前边界：第一版按工作区、执行模式和时间顺序取最近已验证经验，还没做语义相似度检索；历史run不自动回填，避免将无法确认因果关系的旧错误冒充已验证修复。
+- 回归：Repair Memory与领域工作流定向测试`14 passed`；全量测试`111 passed`。
+
+### 阶段 37：知识库检索接入领域 SearchAgent 主链路
+
+- 状态：已完成。领域`/api/workflows/domain/stream`现在默认启用知识库检索，前端可独立开关；外部搜索仍是可选的第二证据源。
+- 查询规划：使用用户需求、显式query和数据列能力确定性生成最多3个query；包含`phi/sp_percent`时增加YODEL/packing查询，包含剪切速率/流动曲线时才增加HB/Bingham查询。
+- 检索协议：每个query先做project/literature自动语料路由，vector与BM25+两路并行召回，再用RRF按名次融合；候选仍是TopK，不把分数误当为TopP概率。
+- 上下文处理：默认TopK=`5`、父章节展开、父块去重和全局`12,000`字符预算；多query候选按rank轮询合并，避免第一个query耗尽全部上下文。
+- 证据门禁：每个主证据的`chunk_id/text_hash/index_version/document_id/document_version`在进入Agent prompt前都会对当前数据库重新校验；校验失败的chunk不会进入Candidate/Model/Operation上下文。
+- 协议兼容：知识库hit会转成原CandidateAgent/ModelAgent可消费的`snippets`协议，但额外保留chunk、文档、页码、路由、检索通道和分块版本；知识库与外部证据轮询合并，不会互相覆盖。
+- 降级：知识库未就绪或Qwen embedding服务不可用时，SearchAgent会保留`failed/degraded`状态和错误，再根据是否有外部证据以及`require_search_results`决定继续或终止，不伪造本地证据。
+- 可观测性：SearchAgent行为的输入摘要显示知识库开关、TopK、上下文预算和外部搜索开关；输出摘要显示路由/检索模式、embedding模型、有效/无效证据数和实际上下文字符数。
+- 真实本地验收：`local_hashing_v1`在当前365个chunk索引上对用户需求+YODEL数据能力查询自动路由到`literature`，稳定证据校验`7/7`通过，多query按rank轮询后在全局预算内选入3条、共`11,999`字符，其中1条同时由vector和BM25+命中，`real_llm_calls=0`。真实冷启动曾暴露Chroma/BM25线程同时首次导入NumPy的部分初始化竞态，已改为主线程预热依赖后再并行检索。
+- 回归：新增领域查询规划、路由检索、证据校验、旧Agent协议转换和RealDomainAdapter主链路测试；最终全量回归`114 passed, 265 warnings`。
+
+### 阶段 38：数据血缘、Anchor语义与评测口径防混淆
+
+- 状态：已完成第一版。DataAgent不再只输出schema和行列数，而是输出可机读的`dataset_lineage`和`anchor_audit`。
+- 当前主数据已确认为`augmented_development`：200条、全部`data_fidelity=augmented_hf`、`is_augmented=true`、67个特征；用于候选搜索和OOF开发评测，不自动冒充独立业务Anchor。
+- 多保真数据会被单独标记为`multifidelity_development`；系统明确提示需按`base_hf_id`/批次做grouped或paired评测，两种数字不得混写。
+- Lian Table 6的16条数据已标记为`literature_mechanism_anchor`；作用是文献机理一致性检查，不是工艺药浆的同域业务Holdout。
+- Anchor门禁现在比较训练/锚点schema、目标单位和完整特征集。当前200条工艺数据与Table 6实测为不兼容：锚点缺少66个训练特征，且属于不同材料/特征域；因此默认禁用Anchor评分并记录具体理由。
+- 前端默认数据卡片现在显示“200条增强开发集”及评浏边界；DataAgent完成事件会展示数据角色、保真计数、增强行数、允许的评测用途和Anchor门禁结果。
+- 统一对外口径：当前主流程成绩为200条增强开发数据上的5折OOF RMSE=`0.2839 Pa`、R²=`0.9943`，相对固定基线RMSE=`0.3011`下降约`5.73%`；该口径不等于生产泛化或独立业务Anchor成绩。
+- 回归：新增200条增强集、20+180多保真集、文献锚点和跨域不兼容判定测试；真实CSV冒烟确认主数据角色正确、Table 6缺少66个训练特征并被禁用；最终全量回归`118 passed, 265 warnings`。
+
+### 阶段 39：多保真评测的严格分组隔离
+
+- 状态：已完成。阶段检查发现原联合搜索会对20条高保真数据做普通KFold，并在每折训练中使用全部180条低保真/增强行；这会让验证批次对应的增强样本进入训练，存在组级泄漏风险。
+- 拆分升级：高保真样本改用`GroupKFold`，分组键优先级为`base_hf_id -> raw_batch_id -> batch_id`；普通候选每折只看高保真训练组，多保真候选额外剔除与验证组同ID的所有低保真行。
+- 失败门禁：多保真候选如缺少可用分组元数据，直接标记失败，不再回退到会混入同组增强数据的随机KFold。
+- 可审计输出：每折记录高/低保真训练数、验证数、因同组被剔除的增强行数和两类组重叠列表；主搜索返回也新增`fixed_baseline`明细，可直接检查基线是否同样使用分组协议。
+- 真实数据冒烟：20个高保真组+180条低保真数据做5折评测；每折为16个高保真训练组/4个验证组，保留144条低保真训练行并剔除36条验证同组行；`train_valid_group_overlap=[]`、`lf_train_validation_group_overlap=[]`，严格隔离通过。
+- 新协议对照线：20个高保真组上的5折Group OOF中，Ridge固定基线最优，RMSE=`0.6035 Pa`、R²=`0.3461`；这只是严格分组对照线，还不是重跑真实候选后的最终冠军成绩。
+- 口径影响：该修改只升级20+180多保真数据的评测协议，不会改写200条增强开发集已报告的5折OOF RMSE=`0.2839 Pa`与R²=`0.9943`；两组数字仍不能直接混比。
+- 回归：新增同组低保真剔除、缺少分组元数据拒绝和主搜索基线审计集成测试；最终全量回归`121 passed, 265 warnings`。
+
+### 阶段 40：Session Context 主链路闭环
+
+- 状态：已完成。原先已有session、turn、约束版本、确认记忆、rolling summary和`build_context()`，但Function Calling和领域LangGraph只关联`session_id/turn_id`审计，没有真正消费组合后的上下文。
+- Function Calling：`execute_plan` 现在在第一次模型调用前加载有界session context，把当前约束、已确认的session/workspace memory、rolling summary、当前run摘要和最近消息注入system context；审计只保留章节名、预算、裁剪项和约束版本，不把全文复制到事件。
+- 领域LangGraph：`DomainWorkflowRequest`新增`session_id/turn_id/session_context_max_tokens`；启动节点验证turn归属与workspace隔离，加载后传给CandidateAgent、ModelAgent和Operation执行合同，并将session绑定到真实run。
+- 上下文优先级：当前用户需求/显式约束 > 已验证Repair Memory > session/workspace已确认记忆 > rolling summary/最近消息 > 检索证据；历史内容不能用来绕过当前安全合同。
+- 预算修正：不再因“必选章节”无限超出`max_context_tokens`；超长约束按剩余预算裁剪，记录`estimated_tokens/included_tokens/clipped`，总量不超过声明上限。
+- 前端：浏览器通过`localStorage`复用session；每次真实Agent运行前先写入turn，再把`session_id/turn_id`传给领域流。Agent行为区可看到已选上下文章节和预算，不展开敏感全文。
+- 边界：本阶段完成时Repair Memory仍是`workspace_id + execution_mode + recency`；后续已在阶段44补齐任务预排序和真实执行错误的相似度重排。rolling summary仍通过可追溯API更新，未做自动LLM压缩。
+- 回归：新增Function Calling上下文注入、领域run绑定、预算硬上限和跨workspace拒绝测试；最终全量回归`125 passed, 265 warnings`。
+
+### 阶段 41：ToolExecutor、受控参数自修正与风险策略
+
+- 状态：已完成主闭环。新增`yieldmind/tool_execution.py`，实际承担工具查找后的参数准备、Policy判定、幂等占位、handler执行、异常归一化、脱敏和审计。`ToolRegistry.execute()`仅作旧调用方的兼容委托，API、Function Calling和真实离线Workflow已直接走ToolExecutor。
+- 执行上下文：新增`ExecutionContext`，保留actor、caller、run/session/turn、执行模式和可信grants；授权从模型可生成的args中分离。
+- 风险策略：ToolSpec/ToolDefinition新增`execution_backend` 和`required_grants`。任意Python subprocess由medium提升为high；Docker需`docker_execute`，subprocess需`subprocess_execute`，真实LLM pipeline同时需`live_llm + subprocess_execute`，知识写入需`knowledge_write`。high工具如声明`in_process`会被Policy直接拒绝。
+- 授权边界：即使模型在工具args中自行填写`allow_docker=true`，没有外层`ExecutionContext` grant仍会在handler之前被拒绝；拒绝尝试以`denied`状态留痕。
+- 结构化错误：未知工具、JSON不合法、参数不是object和Pydantic字段错误统一输出`code/phase/tool_name/field_errors/correction_hint/repairable`；参数校验失败时不调用handler。
+- 有限自修正：真实Agent Loop把结构化tool error作为tool message返回模型，默认只允许一次参数修正；第二次仍不合法时以`tool_argument_repair_exhausted`终止。失败批次里即使有其他合法调用也整批不执行，避免部分副作用。
+- 审计：ToolResult保留`error_detail` 和`audit`，可查risk、backend、caller、grants和PolicyDecision；参数失败记为`invalid`，策略拒绝记为`denied`，幂等占位只在验证与授权通过后创建。
+- 当前边界：本阶段是轻量capability policy，不是完整RBAC；幂等临时错误选择性重试已在阶段43完成，并行工具和MCP/动态插件仍按后续优先级保留。
+- 回归：新增结构化校验失败、high风险授权、模型不可自授权、一次修正成功、二次失败终止和混合批次零部分执行测试；最终全量回归`131 passed, 265 warnings`。
+
+### 阶段 42：工具结果有界回传
+
+- 状态：已完成。实时Agent Loop不再把工具完整返回值无上限塞回模型上下文；`ToolPlanRequest.max_tool_result_chars`默认限制单个tool message为12000字符，可在1000～50000之间显式调整。
+- 保留策略：优先保留成功/失败状态、结构化错误、指标、选中方案、证据标识、warning和artifact path；列表和长文本做有界摘要，并返回`result_truncated/original_result_chars/model_result_budget_chars`供审计。
+- 双路结果：裁剪只发生在“回给模型”的tool message。`ToolExecutionResult.results`、运行事件和数据库工具审计仍保留脱敏后的完整结果，避免因节省上下文而丢失可追溯性。
+- 安全边界：裁剪前先递归脱敏；即使返回值进入最小预览分支，仍对最终JSON做严格字符上限约束，不会因超长artifact或error字段突破预算。
+- 回归：新增大结果严格预算、敏感字段脱敏、artifact指针保留和“模型裁剪/执行结果完整”集成测试；最终全量回归`133 passed, 265 warnings`。
+
+### 阶段 43：幂等保护下的选择性重试
+
+- 状态：已完成。ToolSpec/ToolDefinition新增`retry_safe`和`max_transient_retries`，重试能力从隐式行为变成可查询的工具合同；当前只为只读的`search_knowledge`显式开启，最多重试2次。
+- 三重门禁：只有工具声明`retry_safe=true`、调用带有幂等键、并且本次失败被明确标记`retryable=true`时才会重试。参数错误、Policy拒绝、幂等冲突、普通代码异常和未授权副作用工具均不重试。
+- 临时错误边界：识别Timeout/Connection类异常和handler显式返回的retryable错误；使用有上限的指数退避，单次等待最多2秒，不对未知异常猜测性重试。
+- 审计：ToolResult.audit新增`execution_attempts/transient_retries/retry_delays_seconds`；本可重试但因缺幂等键而被抑制时，记录`retry_suppressed_reason`。同一逻辑调用的多次尝试只落一条tool-call审计记录。
+- 回归：新增“两次临时失败后成功”、缺幂等键不重试和普通RuntimeError不重试测试；最终全量回归`135 passed, 265 warnings`。
+
+### 阶段 44：Repair Memory 相似度检索与错误后重排
+
+- 状态：已完成主链路。仍先按`workspace_id + execution_mode + confirmed + active`做强过滤，不允许跨工作区、跨执行模式或未验证candidate进入排序候选。
+- 两阶段检索：任务开始时用用户需求和查询做预排序；OperationAgent真实报错后，再用`error_logs + action_result`归一化错误重排，过滤低相关项，并更新下一轮CandidateAgent、ModelAgent和执行合同的Repair Context。
+- 排序信号：组合embedding cosine、词项归一化相似度、时间新鲜度和完全一致的error signature。服务配置Qwen3 Embedding时使用真实语义向量；当前本地默认为确定性hashing embedding，不冒充Qwen语义效果。
+- 降级机制：embedding客户端不可用时自动退化为词项相似度+时间排序，仅记录异常类型，不中断建模工作流。内存向量缓存以`memory_id + updated_at`失效，确保修复内容更新后重新编码。
+- 可观察性：每条命中记录rank、总分、embedding/词项/时间分量、方法和是否降级；前端Agent行为流会显示Manager在Operation错误后的记忆检索动作，下一轮Candidate/Model输入摘要展示命中数、排序方法和Top score。
+- 回归：新增NaN错误与Docker超时的排序对照、embedding失败降级、真实失败后重排及前端事件契约测试；最终全量回归`137 passed, 265 warnings`。
+
+### 阶段 45：Repair Memory 数据与运行环境适用性门禁
+
+- 状态：已完成。DataAgent的数据画像不再只用于页面展示；LangGraph现在持久传递`data_lineage/data_contract`，数据合同包含数据角色、源Schema、目标列、特征数与排序后特征集合的SHA-256签名。
+- 运行合同：每次领域工作流记录Python、NumPy、Pandas、scikit-learn版本、操作系统、机器架构、执行后端和`operation_contract_version`；不记录环境变量密文或凭据。
+- 错误分类门禁：`data_schema`错误强校验Schema/数据角色/目标列/特征签名；`dependency`错误比较Python与关键依赖主次版本；`resource`错误比较执行后端与平台；`artifact_contract`错误比较产物合同版本。明确不匹配的记忆在向量排序前直接剔除。
+- 旧数据兼容：历史Memory如缺少新合同字段，不伪造匹配，标记`legacy_unscoped/missing_memory_fields`并降低适用性分；只有“双方字段都存在且冲突”时才强拒绝，避免升级后无声丢失全部旧经验。
+- 检索时机：启动时做运行合同预检索，DataAgent完成后携完整数据合同再过滤，Operation失败后用错误文本+两类合同做最终重排；Candidate/Model不会消费已被拒绝的修复。
+- 审计与前端：`repair_memory_retrieval`新增适用性候选数、拒绝数、被拒绝memory ID和逐字段mismatch；随Manager行为与下轮Agent输入摘要直接展示。
+- 真实产物冒烟：现有67特征报告生成Schema=`generated_yield_process_202607`、target=`yield_stress`、feature signature=`1815011fef45b24b28887b5d`；当前环境识别为Python 3.11、NumPy 1.26、Pandas 2.1、scikit-learn 1.4、Darwin/x86_64。
+- 回归：新增跨Schema/数据角色/目标列/特征集拒绝和Python/依赖主次版本兼容性测试；最终全量回归`139 passed, 265 warnings`。
+
+### 阶段 46：Repair Memory 过期与重新确认闭环
+
+- 状态：已完成。已验证Repair Memory默认有效期为90天，以`last_verified_at -> verified_at -> updated_at`的优先级计算年龄；超期记忆仍保留在数据库用于审计，但不进入排序和Agent Context。
+- 旧数据兼容：早期记忆没有`verified_at`时，以`updated_at_legacy_fallback`估算，并在freshness审计中显式标记时间来源，不默认它永久有效。
+- 自动重新确认：只有记忆在当前Operation错误后被相似度+适用性门禁选中，工作流实际进入后续修订轮，新Operation返回`rcode=0`，且Manager review接受时，才刷新验证时间。仅预加载记忆或未经修订就成功，不自动续期。
+- 显式重新确认：新增`POST /api/memories/{memory_id}/reconfirm`，要求提供已存在且`status=passed`的`evidence_run_id`、reviewer和note；证据必须来自领域StateGraph，且workspace与execution mode与Memory兼容。运行中、失败、跨workspace或非领域run会返400，未知run返404。
+- 幂等和追溯：`verification_history`记录run ID、时间、来源、Manager决策、成功结果和note，最多保留20条；同一evidence run重复回调不增加`verification_count`。
+- 前端行为：自动重新确认会产生Agent Manager的`reconfirm_verified_repair_memory`实时行为，包含memory IDs、evidence run和修订轮次；不需要用户打开额外面板。
+- 阶段性验证：过期判定完成后Repair Memory测试`8 passed`；显式重新确认与API完成后`10 passed`；LangGraph自动续期与前端事件`13 passed`；加入跨workspace/非领域证据拒绝后定向复跑`23 passed`；最终全量回归`142 passed, 265 warnings`。
+
+### 阶段 47：Repair Memory 固定评测集与安全拒答基线
+
+- 状态：已完成第一版可重复评测。评测集包含8条已验证Memory fixture和13条query，其中8条正向排序样例、5条workspace/执行模式/数据契约/依赖版本/过期负向样例。
+- 标签边界：当前v1全部是人工构造的契约回归样例，不是生产失败抽样。所有`reuse_outcome=not_observed`，因此报告强制`repair_success.rate=null`、`claimable=false`，不将检索命中率冒充修复成功率。
+- 真实代码路径：每条fixture都经过`record_candidate -> confirm -> retrieve`，使用临时SQLite和固定时钟，不直接伪造confirmed行，不污染开发数据库；离线确定性hashing embedding，`real_llm_calls=0`。
+- 首轮基线：Top-1/Recall@K/MRR均为`1.0000`，误导命中率`0.0000`，但安全拒答率仅`0.4000`。根因是目标记忆被适用性或过期门禁拦截后，排序器又从其他错误类别中补入无关记忆。
+- 修正：Operation出现真实错误后，在embedding排序前增加`error_category`硬门禁；dependency错误再区分NumPy/scikit-learn/Pandas/XGBoost/LightGBM/Torch依赖包族。因此NaN错误不再返回sklearn API修复，NumPy alias错误不再返回sklearn修复。任务启动/数据画像阶段尚无具体错误，继续宽召回，避免用用户需求文本误判错误类别。拒绝原因以`error_category_mismatch/dependency_family_mismatch`进入审计。
+- 修正后严格评测：Top-1=`1.0000`、Recall@K=`1.0000`、MRR=`1.0000`、安全拒答率=`1.0000`、护栏拒绝原因准确率=`1.0000`、误导命中率=`0.0000`，全部预设阈值通过。最新报告：`agent_workspace/yieldmind/repair_memory_evals/repair_memory_eval_20260921_075103.json`。
+- 阶段性验证：Schema/引用合法性`2 passed`；离线执行器接入后`3 passed`；错误类别和依赖包族门禁后Repair Memory定向回归`14 passed`；修复“任务预加载被过度门控”回归后`15 passed`；最终全量回归`146 passed, 265 warnings`。
+
+### 阶段 48：Repair Memory 真实复用结果采集
+
+- 状态：已完成采集链路，后续真实任务会自动累积样本。新增`yieldmind_repair_memory_reuse_attempts`表及SQLite/PostgreSQL迁移，每条记录保留memory/run、workspace、execution mode、命中轮次、应用轮次、Operation rcode、Manager决策和有界结果摘要。
+- 因果边界：任务预加载只说明“看过记忆”，不进入成功率分母。只有Operation真实报错、严格匹配已验证Memory、Manager确实进入下一轮revision时，才创建`applied`尝试；下一轮Operation和Manager review后收敛为`succeeded/failed`。
+- 不污染分母：匹配但预算耗尽、没有进入revision的记忆不建尝试；已应用但尚未review的记录保持open，不进入成功率。终态幂等，失败记录不能被后续重复调用改写为成功。
+- 跨run去重：阶段检查发现同一错误会在不同run生成重复confirmed Memory，从而让一次revision重复计数。已按`workspace + execution_mode + normalized error fingerprint`阻止重复建档，原记忆通过reconfirm累积证据。
+- 统计口径：整体成功率按`run_id + applied_round`的revision episode聚合，不会因同一轮命中多条Memory而放大分母；另保留逐Memory成功/失败统计。有1条以上观测时可计算，但少于30个episode只标记`preliminary`，不作正式效果声称。
+- 查询与导出：新增`GET /api/repair-memory/reuse-summary`，可按workspace查询摘要和可选尝试明细；`scripts/export_yieldmind_repair_memory_outcomes.py`生成不调用模型的JSON报告。
+- 当前真实库结果：升级后尚新增0个可观测复用episode，因此`success_rate=null`、`computable=false`、`claimable=false`、status=`insufficient_evidence`。测试产生的成功/失败样例使用临时数据库，没有污染真实统计。
+- 阶段性验证：表、幂等和终态单测`12 passed`；真实工作流成功/失败各一次与跨run去重`14 passed`；API/导出/数据库生命周期`15 passed`；13条固定检索评测继续全通过；最终全量回归`148 passed, 265 warnings`。
+
+### 阶段 49：Agent Loop 受控故障恢复 A/B 评测
+
+- 状态：已完成收口评测，不新增Agent或改变主架构。新增30条成对任务：5条无故障正常对照、20条可恢复故障、5条不可恢复负对照。
+- 可恢复故障：基线评估、候选benchmark、产物校验和报告生成首次失败应路由`local_repair`；数据生成和数据画像首次失败应路由`replan`。不可恢复对照为强制证据不可用，应安全失败而不是绕过门禁。
+- 成对协议：每条case的数据、随机种子、真实本地工具和完成判定完全相同；唯一差别是基线组`max_local_repairs=max_replans=0`，实验组各允许1次。故障注入只替换声明工具的第一次返回，恢复后必须真实重跑数据、模型、产物和报告链路。
+- 完成判定：同时要求最终`status=passed`、finish节点通过、生成`report_json`且errors为空，不只看某一个节点返回200。
+- A/B结果：关闭恢复时完成`5/30=16.7%`；开启有界Agent Loop后完成`25/30=83.3%`，提升`66.7`个百分点。20/20条可恢复故障恢复成功，路由准确率`100%`；5条不可恢复负对照均继续失败，没有伪造成功。
+- 代价：平均运行时间由`1.325s`增加到`2.305s`；实验组平均局部修复`0.533`次、重规划`0.133`次。这是恢复能力换取的可量化开销。
+- 口径边界：这是“真实本地工具+受控故障注入”的LangGraph恢复评测，`real_llm_calls=0`，不代表真实LLM代码生成或生产流量完成率。简历必须保留“30条受控故障A/B”限定语。
+- 分层评测总量：核心Agent/工具/工作流37条+检索30条+语料路由32条+Repair Memory 13条+故障恢复30条，共`142`条。单元/集成工程回归另计，不混入评测集数量。
+- 阶段性验证：30条Schema、路由分布和故障次数单测`3 passed`；60次真实本地工作流A/B报告status=`passed`；最终全量回归`151 passed, 265 warnings`。
+
+### 阶段 50：项目收口与演示验收
+
+- 状态：已完成；本阶段不再增加Agent或主链路功能，只统一简历口径、证据位置、复现命令和演示验收记录。
+- 面试口径：新增`YieldMind_Interview_Claims.md`，明确区分LangGraph故障恢复循环、领域多Agent修订循环和Pydantic工具参数自修正；`142条`、`16.7% -> 83.3%`、`20/20`和`151 passed`均标出分母、证据与不可外推边界。
+- 服务健康：真实HTTP访问根页面和静态JS均返回200；`/health/dependencies`确认SQLite、Redis和本地确定性知识库全部`ok=true`。Repair Memory真实复用仍为0个episode，成功率保持`null`，没有用测试数据填充分母。
+- 演示运行：通过`POST /api/workflows/offline`完成`run_eba1fca98c1b`；后端为`langgraph_stategraph`，`start -> prepare_data -> profile -> retrieve_evidence -> evaluate -> candidate_benchmark -> verify_artifacts -> report -> finish`共9个阶段全部`passed`，errors为空。
+- 演示产物：报告写入`agent_workspace/yieldmind/reports/yieldmind_report_1789990811.json`；该20样本、2折演示只证明端到端工程链路可运行，不替代200条增强开发集的统一模型指标，也不调用LLM。
+- 最终边界：后续只接受缺陷修复、真实任务数据积累和人工标注结果回填；没有新证据时不再扩充简历数字或宣称真实LLM修复率。
+
 ## 本轮验证结果
 
 验证环境：`/opt/anaconda3/envs/amla/bin/python`
@@ -505,7 +909,20 @@
 | --- | --- |
 | `python -m py_compile yieldmind/*.py scripts/*.py tests/*.py` | 通过 |
 | `python scripts/init_yieldmind_db.py` | 通过，初始化 `agent_workspace/yieldmind/yieldmind.sqlite3` |
-| `python -m pytest -q` | 最终全量复跑`85 passed, 159 warnings`；新增多格式解析、下载安全、来源溯源、语料隔离、embedding分批和跨存储孤儿向量隔离测试。warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python -m pytest -q` | 最终全量复跑`151 passed, 265 warnings`；覆盖结构化Manager路由、逐Agent行为与领域流式事件、Session Context主链路、ToolExecutor/ToolPolicy与受控参数自修正、工具结果有界回传与幂等选择性重试、SearchAgent知识库主链路、数据血缘与Anchor兼容门禁、多保真严格分组隔离、带相似度、适用性、过期、重新确认、错误类别/依赖包族安全拒答、固定评测与真实复用结果采集的跨任务Repair Memory、受控故障A/B、Operation大结果回传、多格式文献、评审裁决、跨分块池化盲审与配置防错、语料路由词边界与显式过滤、工作台上传/流式事件和固定Gold重排。warning 来自 joblib CPU core探测、sklearn GPR收敛提示和Chroma/Pydantic deprecation，不影响结果 |
+| `python scripts/run_yieldmind_recovery_eval.py` | 通过；30条成对受控故障任务上，关闭恢复`5/30=16.7%`，开启有界恢复`25/30=83.3%`，提升`66.7`个百分点；可恢复故障恢复率和路由准确率均为`100%`，`real_llm_calls=0` |
+| 最终真实HTTP演示验收 | `run_eba1fca98c1b`通过；`langgraph_stategraph`的9个阶段全部`passed`，SQLite/Redis/knowledge依赖全部健康，生成JSON/Markdown报告；该演示`real_llm_calls=0` |
+| `python scripts/run_yieldmind_repair_memory_eval.py` | 通过；13条固定契约case上Top-1/Recall@K/MRR/安全拒答率/护栏拒绝原因准确率均为`1.0000`，误导命中率`0.0000`，`real_llm_calls=0`；无真实复用outcome，因此修复成功率为`null` |
+| `python scripts/export_yieldmind_repair_memory_outcomes.py` | 通过；当前真实库0个已观测revision episode，`success_rate=null`、status=`insufficient_evidence`、`real_llm_calls=0`；报告不混入临时测试数据 |
+| `python -m pytest -q tests/test_domain_workflow.py tests/test_process_control.py` | `16 passed`；覆盖Manager合法路由、review回环预算、Operation取消/超时/进程组清理、运行时细节事件与8 MB大结果队列回传 |
+| `run_yieldmind_retrieval_eval.py --split-strategy recursive_chars_v3 --chunk-size 700 --chunk-overlap 80` | 通过；同参数v3 hybrid Recall@5=`0.9000`、MRR=`0.8361`、Top-1=`0.8000`，39 chunks |
+| `run_yieldmind_retrieval_eval.py --split-strategy section_aware_v4`（hashing分块A/B） | `450/60`、`700/80`、`900/120`的hybrid Recall@5均为`0.9000`；MRR分别为`0.8361/0.8417/0.8417`，Top-1均为`0.8000`。报告保存于`/private/tmp/yieldmind_chunk_eval_*` |
+| `prepare_yieldmind_chunking_review.py` | 通过；30 case的300个Top-5系统映射池化为168条盲审候选，132条为两系统共享；双人CSV隐藏系统与排名，标签目前为空 |
+| `prepare_yieldmind_chunking_review.py --candidate-scope top1_union` + 第一位人工评审 | 通过；第一位评审32/32行完成且候选哈希校验通过；两套分块Top-1直接相关率均为`60.0%`、至少部分相关率均为`83.3%`，`0胜/0负/30平`。这是单评审Top-1快速筛选，不是最终Gold或Top-5质量评测 |
+| `run_yieldmind_routing_eval.py --verify-retrieval` | 通过；32/32静态路由正确，32/32持久化索引检索成功，corpus纯度`1.0000`，无强意图强制路由率`0` |
+| `python scripts/ingest_yieldmind_corpora.py`（local hashing） | 通过；实际重建7篇项目文档/39 chunks和8篇文献/326 chunks为`section_aware_v4`，corpus隔离及DOI/URL/页码检查全true |
+| `FastAPI TestClient /api/workflows/offline/stream`（默认200行CSV） | 通过，`run_316bb843f863`返回`passed`、18条节点事件和9个阶段；最终推荐Ridge基线，OOF RMSE=`0.3193`、R2=`0.9928`，报告保存200条获胜预测点 |
+| FastAPI真实HTTP前端契约与20样本流式运行 | 根页面/JS/CSS/health/默认数据均返回200；`run_d59daa7b12c7`返回18条真实Agent事件、7个角色、9个阶段及最终`passed`，服务验证后已正常停止 |
 | `python scripts/run_yieldmind_eval.py` | 通过，`37/37` case passed；`real_llm_calls=0`，`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py` | 通过，30条case分别完成hashing vector、BM25+和RRF hybrid；结果如阶段16，`real_llm_calls=0`、`simulated_model_calls=0` |
 | `python scripts/run_yieldmind_retrieval_eval.py --preset qwen3-embedding-0.6b --embedding-endpoint http://127.0.0.1:8091` | 通过，真实Qwen3 CPU embedding完成30条case；hybrid Recall@5=`1.0000`、MRR=`0.8639`，服务峰值RSS约`3.90GB`，`real_llm_calls=0` |
@@ -514,6 +931,7 @@
 | `python scripts/check_yieldmind_qwen_api_http.py --api-base-url http://127.0.0.1:8072 --embedding-endpoint http://127.0.0.1:8091` | 通过，独立Uvicorn/TCP正常场景13/13及Qwen不可达场景7/7检查通过；正向真实9次encode/22条文本，反向readiness=503，`real_llm_calls=0` |
 | `python scripts/check_yieldmind_embedding_capability.py` | 通过；离线确认Qwen3/BGE-M3均未达到本机零变更运行条件，`network_calls=0`、`model_downloads=0`、`model_inference_calls=0` |
 | `python scripts/ingest_yieldmind_corpora.py`（Qwen3 profile） | 通过；PostgreSQL+Chroma实存7篇项目文档/39 chunks和8篇文献/326 chunks，幂等复跑`document_encode_calls=0`、两次query embedding，语料隔离和DOI/URL/页码检查均通过，`real_llm_calls=0` |
+| `.venv-qwen3/bin/python scripts/run_yieldmind_reranker_eval.py --scorer qwen3-embedding-cosine --device cpu --batch-size 16` | 通过；固定人工Gold的Qwen embedding余弦重排使MRR `0.8861→0.8389`、Top-1 `0.8333→0.7667`、nDCG `0.9409→0.8921`，结论为不启用；该结果不是cross-encoder指标 |
 | `python scripts/run_yieldmind_function_calling_smoke.py` | 通过，生成 skipped 报告；`real_llm_calls=0`，未调用真实模型 |
 | `python scripts/run_yieldmind_workflow.py --n-samples 40 --n-splits 2` | 通过，`status=passed`、`workflow_backend=langgraph_stategraph`、`langgraph_available=true` |
 | `pip check` | 通过，`No broken requirements found` |
@@ -548,6 +966,9 @@ agent_workspace/yieldmind/integrations/postgres_redis_recovery_20260918_072715.j
 agent_workspace/yieldmind/integrations/postgres_redis_domain_queue_20260918_085450.json
 agent_workspace/yieldmind/qwen_api_http/20260918_113601/qwen_api_http_unready.json
 agent_workspace/yieldmind/qwen_api_http/20260918_113809/qwen_api_http_ready.json
+agent_workspace/yieldmind/repair_memory_evals/repair_memory_eval_20260921_075103.json
+agent_workspace/yieldmind/repair_memory_outcomes/repair_memory_outcomes_20260921_075058.json
+agent_workspace/yieldmind/recovery_evals/recovery_eval_20260921_130839.json
 ```
 
 评测 case：
@@ -586,9 +1007,13 @@ http://127.0.0.1:8070/api/tools
 
 ## 待办
 
-- 对新`yieldmind.domain_workflow`执行一次显式授权的真实模型端到端验收，并记录模型、时间、各节点结果与失败原因；当前只完成真实领域方法接线和模拟路由回归。
-- 在30条项目内查询基础上增加真实用户查询、双人标签复核和外部文献语料，避免以当前小规模自建集替代生产效果。
+- 数据角色与Anchor兼容门禁已接入；下一个数据依赖项是获得与200条增强工艺数据同材料体系、同67特征口径且从未参与生成/训练的真实批次。到位后按批次或时间留出重跑，将OOF开发指标与业务Holdout指标分开固化。
+- 完成两份分块池化盲审CSV的独立人工标注，运行一致性分析和分歧裁决；以最终Gold比较同参数v3/v4。若v4的人工指标仍有优势，再执行Qwen3 embedding同参数复验。
+- 领域SearchAgent主链路已接入配置化知识库；当前本机API使用`local_hashing_v1`离线profile。后续在Qwen3 embedding HTTP服务就绪时，需再跑一次真实领域端到端，对比SearchAgent延迟、证据变化和最终候选方案；不沿用已被否决的embedding余弦重排。
+- Repair Memory的验证、相似度排序、失败后重排、数据Schema/依赖/执行合同适用性门禁、过期/重新确认、13条合成契约评测和真实复用结果自动采集已完成；后续是在真实运行中累积至少30个独立revision episode，再报告可对外声称的修复成功率。人工拒绝机制已由memory review API支持。
+- 已完成`yieldmind.domain_workflow`的显式授权真实端到端验收；首次运行暴露的`multiprocessing.Queue`大结果回传死锁已修复，8 MB回归与第二次真实运行均通过，Operation不再被误判600秒超时。
+- 在已完成双人标注和24条争议裁决的30条项目内查询基础上，继续增加真实用户查询和外部文献查询标签，避免以当前小规模自建集替代生产效果。
 - 对真实 LLM Function Calling 做一次显式 `allow_live_llm=true` 冒烟测试，并记录模型、时间和结果；默认评测仍保持零 LLM 调用。
-- Qwen3已在隔离环境完成同口径实测；下一步先扩充真实查询并双人复核标签，再决定是否切换默认embedding。只有现有失败case仍显示可修复空间时，再投入BGE-M3或Reranker对照；Next.js仍未完成且当前优先级较低。
+- Qwen3 embedding余弦重排已在固定Gold上实测并因指标退化而否决；待固定revision的Qwen3-Reranker模型可用后再执行正式cross-encoder对照，同时继续扩充真实查询。FastAPI静态实验工作台已完成第一轮可视化重构，Next.js仍未引入。
 - Docker/no-network 运行时已真实通过；官方 `python:3.11-slim` 可复现镜像构建因 Docker Hub token 请求超时未完成，本轮运行验证使用本机缓存 Python 3.8 slim镜像的临时本地标签。
 - LangGraph升级层已有条件边、PostgreSQL持久检查点、Tool持久幂等、节点边界取消、Operation进程组终止和任务级人工恢复；自动恢复、普通同步Tool节点内取消和模糊`running` Tool通用处置仍未完成。
