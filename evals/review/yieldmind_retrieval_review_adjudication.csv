@@ -1,0 +1,406 @@
+row_id,case_id,query,query_zh,candidate_code,candidate_text,candidate_text_zh,reviewer_a_relevance,reviewer_a_confidence,reviewer_a_notes,reviewer_b_relevance,reviewer_b_confidence,reviewer_b_notes,label_distance,adjudicated_relevance,adjudication_notes
+data_leakage_denylist:E,data_leakage_denylist,target leakage denylist phi_max m1_true m1_lf,目标泄漏禁用列：phi_max、m1_true和m1_lf,E,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.","## Lian 风格堆积状态
+
+对于临时使用的 Lian 数据布局，已知列为 `Phi`、`SP_percent` 和目标 `Tau0_Pa`。项目说明描述了一种 Lian 风格物理层，其中减水剂掺量可能控制有效堆积状态。这只是一种候选关系，并不意味着可以使用由目标值推导出的隐藏列。
+
+## 隐藏物理变量
+
+物理信息模型可以预测 `phi_m` 或 `m1_eff` 等隐藏变量，再通过受约束的物理层计算屈服应力。有效性诊断必须检查 `phi_m > phi`、`m1_eff` 有界、输出有限以及预测屈服应力非负等条件。",1,high,明确禁止使用目标推导的隐藏列，与泄漏控制相关，但未列出所问禁用列。,0,high,没回答问题,1,1,说了背景，没说明了禁止使用泄露列
+safety_redaction:B,safety_redaction,redact authorization api keys passwords database URLs email phone,如何脱敏Authorization、API密钥、密码、数据库URL、邮箱和电话,B,"# Execution Isolation And Safety
+
+Scope: execution guarantees implemented by the current sandbox, process
+control, redaction, and task-state code.
+
+## Command construction
+
+Execution tools accept an argument vector instead of a shell command string.
+Avoiding `shell=True` prevents shell metacharacters from changing command
+meaning. Working directories and environment variables are passed explicitly.
+
+## Container isolation
+
+The Docker sandbox runs with networking disabled and applies CPU, memory, and
+process-count limits. The image contains fixed numerical dependencies and does
+not bake host API keys into an image layer. Docker execution still requires an
+explicit authorization flag.","# 执行隔离与安全
+
+范围：当前沙箱、进程控制、脱敏和任务状态代码所实现的执行保障。
+
+## 命令构造
+
+执行工具接收参数向量，而不是 shell 命令字符串。避免使用 `shell=True` 可以防止 shell 元字符改变命令含义。工作目录和环境变量均显式传入。
+
+## 容器隔离
+
+Docker 沙箱禁用网络，并施加 CPU、内存和进程数量限制。镜像只包含固定的数值计算依赖，不会把宿主机 API 密钥写入镜像层。执行 Docker 仍然需要显式授权标志。",1,medium,提到禁止将主机 API 密钥写入镜像，涉及密钥保护，但未说明脱敏方法和覆盖对象。,2,medium,部分和问题相关,1,1,只做为背景，没有说明怎么脱敏
+safety_redaction:E,safety_redaction,redact authorization api keys passwords database URLs email phone,如何脱敏Authorization、API密钥、密码、数据库URL、邮箱和电话,E,"## Cancellation
+
+Long-running OperationAgent subprocesses start in a separate process group.
+Cancellation or timeout sends termination to the group and escalates to a kill
+signal after a grace period. This covers descendants created by that operation;
+ordinary synchronous Python tools still stop only at their supported boundary.
+
+## Secret handling
+
+Tool arguments, results, and event payloads pass through redaction before
+sensitive values are persisted. Authorization headers, API keys, passwords,
+database URLs, email addresses, and phone-like values are covered by the
+current redaction checks. Redaction reduces exposure but is not encryption.","## 取消执行
+
+长时间运行的 OperationAgent 子进程在独立进程组中启动。取消或超时时，系统会向整个进程组发送终止信号，并在宽限期后升级为强制杀死信号。这会覆盖该操作创建的后代进程；普通同步 Python 工具仍然只能在其支持的边界停止。
+
+## 密钥处理
+
+工具参数、结果和事件载荷在敏感值持久化前都会经过脱敏。当前脱敏检查覆盖 Authorization 请求头、API 密钥、密码、数据库 URL、邮箱地址和类似电话号码的值。脱敏可以降低暴露风险，但不等同于加密。",2,high,明确说明持久化前脱敏，并覆盖所问的凭证、数据库 URL、邮箱和电话。,1,high,部分相关,1,1,这个第二部分说明了要进行脱敏，但是没说明如何进行脱敏，作为背景
+agent_retry_budget:C,agent_retry_budget,bounded local repair replan tool calling termination budget,如何限制局部修复、重新规划、工具调用和终止预算,C,"## Multi-agent roles
+
+The original requirement, search, candidate, model, operation, and review
+responsibilities remain distinct even though LangGraph now owns the shared
+state and transitions. Multi-agent value comes from role separation and
+verification boundaries, not from the number of model calls.
+
+## Tool Registry
+
+The Tool Registry publishes Pydantic JSON schemas and validates arguments
+before invoking data profiling, baseline evaluation, candidate benchmarking,
+knowledge retrieval, evidence validation, reporting, or sandbox execution.
+Unknown tool names and invalid parameters must fail explicitly.","## 多 Agent 角色
+
+尽管现在由 LangGraph 管理共享状态和状态迁移，原有的需求、搜索、候选、模型、执行和审查职责仍然彼此独立。多 Agent 的价值来自角色分离和验证边界，而不是模型调用次数。
+
+## 工具注册表
+
+Tool Registry 发布 Pydantic JSON Schema，并在调用数据分析、基线评测、候选方案评测、知识检索、证据验证、报告生成或沙箱执行之前校验参数。未知工具名称和非法参数必须明确失败。",1,medium,说明工具参数校验和显式失败，与失败处理相关，但未给出修复、重规划或重试预算。,0,medium,与题目不相关,1,1,只是背景，不是解决说明
+data_units_schema:B,data_units_schema,target unit numeric coercion missingness unsupported schema,如何检查目标单位、数值转换、缺失值和不支持的数据模式,B,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.","## Lian 风格堆积状态
+
+对于临时使用的 Lian 数据布局，已知列为 `Phi`、`SP_percent` 和目标 `Tau0_Pa`。项目说明描述了一种 Lian 风格物理层，其中减水剂掺量可能控制有效堆积状态。这只是一种候选关系，并不意味着可以使用由目标值推导出的隐藏列。
+
+## 隐藏物理变量
+
+物理信息模型可以预测 `phi_m` 或 `m1_eff` 等隐藏变量，再通过受约束的物理层计算屈服应力。有效性诊断必须检查 `phi_m > phi`、`m1_eff` 有界、输出有限以及预测屈服应力非负等条件。",1,medium,给出已知列、目标列以及输出有限和非负检查，但未覆盖所问的数据输入校验要求。,0,high,讲隐藏物理变量，与题目无关,1,1,第二部分说明了一些有效性的诊断，但是没有明确写出如何数值转换
+data_units_schema:E,data_units_schema,target unit numeric coercion missingness unsupported schema,如何检查目标单位、数值转换、缺失值和不支持的数据模式,E,"## Target leakage denylist
+
+Target and auxiliary true-physics columns must never become model inputs. The
+project denylist includes `Tau0_Pa`, `tau_Pa`, `yield_stress`, `phi_max`,
+`m1_true`, and `m1_lf`. Hidden-variable predictions must be generated from
+allowed features, not copied from true hidden-state columns.
+
+## Split-aware preprocessing
+
+Imputation, scaling, encoding, and learned feature transforms must be fit only
+on each training fold or training split. Fitting preprocessing on all rows
+before cross-validation leaks validation distribution information and makes
+the reported metric optimistic.","## 目标泄漏禁用列表
+
+目标列以及辅助的真实物理量列绝不能成为模型输入。项目禁用列表包括 `Tau0_Pa`、`tau_Pa`、`yield_stress`、`phi_max`、`m1_true` 和 `m1_lf`。隐藏变量预测必须由允许使用的特征生成，不能直接复制真实隐藏状态列。
+
+## 感知数据划分的预处理
+
+缺失值填补、缩放、编码和学习得到的特征变换，只能在每个训练折或训练集上拟合。在交叉验证前使用全部样本拟合预处理流程会泄漏验证集的分布信息，使报告指标过于乐观。",1,medium,涉及输入列约束和缺失值填补，与数据处理相关，但未回答单位及模式检查要求。,0,high,讲泄漏和预处理，不是单位与模式,1,1,说到了缺失值填补一点点的内容，但是距离目标比较远
+data_split_preprocessing:D,data_split_preprocessing,fit scaling imputation only on training fold prevent leakage,为什么缩放和缺失值填补只能在训练折上拟合，以防止数据泄漏,D,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.","## 单位与数据模式检查
+
+仅有列别名并不足够。一次运行应保留目标变量的单位，检查数值类型转换，报告缺失情况，并拒绝不受支持的数据模式，而不是静默猜测目标列。屈服应力预测值应当是有限且非负的。
+
+## 分布漂移
+
+随机划分无法代表所有部署场景。当数据中存在不同批次、配方、粉体类型或采集时期时，应考虑按组或按时间留出验证。模型可能在随机划分下得分很好，却仍然无法泛化到新的配方领域。",1,medium,讨论缺失检查和分组、时间留出验证，与数据准备及划分相关，但未说明预处理拟合边界。,0,medium,单位检查和分布漂移，不是预处理拟合,1,0,没有说为什么缩放和缺失值填补只能在训练集上拟合，与目标距离较远
+mechanism_hidden_variable:E,mechanism_hidden_variable,hidden physical variable phi_m m1_eff validity diagnostics,隐藏物理变量phi_m和m1_eff需要哪些有效性诊断,E,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.","# YieldMind 领域种子知识
+
+YODEL 是一类屈服应力机理，用于描述致密悬浮体系的静态屈服应力与固相体积分数、最大堆积密度 `phi_m` 以及颗粒接触网络效应之间的关系。在本仓库中，只有当现有数据列支持堆积类特征时，才将其视为候选机理。
+
+当生成模型声称某个物理机理提升了预测效果时，必须进行机理消融。应在相同协议下比较 `with_mechanism` 与 `without_mechanism`，记录 RMSE 和 R2 的变化量，并避免把很小的提升描述成强有力的物理验证。",1,medium,介绍 phi_m 和堆积特征适用条件，提供物理背景，但缺少隐藏变量有效性诊断。,0,medium,与题目无关,1,0,虽然提到了这两个参数，但是没有回答相应的问题
+evidence_lifecycle:A,evidence_lifecycle,document hash idempotent delete metadata vectors retrieval,文档哈希、幂等入库、删除、元数据、向量和检索的生命周期如何管理,A,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",YieldMind 将外部证据与生成式结论分开处理。使用某种机理的报告应引用具体的知识块、来源路径、文档版本和索引版本。chunk ID 只能证明证据可追溯，不能证明语义上真实成立；文本是否确实支持某项结论，仍然需要带标签的检查或人工复核。,1,medium,要求保留来源及文档、索引版本，与文档治理有关，但未说明哈希幂等和删除流程。,0,medium,讲引用与语义支持，不是生命周期,1,0,与回答的问题无关
+eval_fixed_baseline:C,eval_fixed_baseline,run_fixed_baseline_eval deterministic reference normalized schema,run_fixed_baseline_eval如何提供基于规范数据模式的确定性参考,C,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.","## 单位与数据模式检查
+
+仅有列别名并不足够。一次运行应保留目标变量的单位，检查数值类型转换，报告缺失情况，并拒绝不受支持的数据模式，而不是静默猜测目标列。屈服应力预测值应当是有限且非负的。
+
+## 分布漂移
+
+随机划分无法代表所有部署场景。当数据中存在不同批次、配方、粉体类型或采集时期时，应考虑按组或按时间留出验证。模型可能在随机划分下得分很好，却仍然无法泛化到新的配方领域。",1,medium,提供规范数据模式的检查要求，但未说明固定基线或确定性参考。,0,high,不相关,1,0,我觉得不相关
+mechanism_alternatives:A,mechanism_alternatives,Bingham Herschel-Bulkley Casson thixotropic candidate relations,Bingham、Herschel-Bulkley、Casson和触变结构动力学等备选关系如何取舍,A,"## Lian-style packing state
+
+For the temporary Lian layout, the known columns are `Phi`, `SP_percent`, and
+the target `Tau0_Pa`. The project notes describe a Lian-style physical layer in
+which superplasticizer dosage may control an effective packing state. This is
+a candidate relation, not permission to use target-derived hidden columns.
+
+## Hidden physical variables
+
+A physics-informed model may predict a hidden variable such as `phi_m` or
+`m1_eff`, then compute yield stress through a constrained physical layer.
+Validity diagnostics must verify conditions such as `phi_m > phi`, bounded
+`m1_eff`, finite output, and non-negative predicted yield stress.","## Lian 风格堆积状态
+
+对于临时使用的 Lian 数据布局，已知列为 `Phi`、`SP_percent` 和目标 `Tau0_Pa`。项目说明描述了一种 Lian 风格物理层，其中减水剂掺量可能控制有效堆积状态。这只是一种候选关系，并不意味着可以使用由目标值推导出的隐藏列。
+
+## 隐藏物理变量
+
+物理信息模型可以预测 `phi_m` 或 `m1_eff` 等隐藏变量，再通过受约束的物理层计算屈服应力。有效性诊断必须检查 `phi_m > phi`、`m1_eff` 有界、输出有限以及预测屈服应力非负等条件。",1,medium,介绍另一种堆积物理层及有效性约束，但未说明所列备选关系的取舍。,0,medium,只讲Lian布局和隐藏变量,1,0,说的非分堆、分格堆积状态和隐藏物理变量与题目无关
+mechanism_alternatives:B,mechanism_alternatives,Bingham Herschel-Bulkley Casson thixotropic candidate relations,Bingham、Herschel-Bulkley、Casson和触变结构动力学等备选关系如何取舍,B,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.","# YieldMind 领域种子知识
+
+YODEL 是一类屈服应力机理，用于描述致密悬浮体系的静态屈服应力与固相体积分数、最大堆积密度 `phi_m` 以及颗粒接触网络效应之间的关系。在本仓库中，只有当现有数据列支持堆积类特征时，才将其视为候选机理。
+
+当生成模型声称某个物理机理提升了预测效果时，必须进行机理消融。应在相同协议下比较 `with_mechanism` 与 `without_mechanism`，记录 RMSE 和 R2 的变化量，并避免把很小的提升描述成强有力的物理验证。",1,high,提供机理适用条件与消融验证原则，但未针对所列备选关系。,0,high,不相关,1,0,我觉着是不相关的，不一样的东西
+mechanism_alternatives:C,mechanism_alternatives,Bingham Herschel-Bulkley Casson thixotropic candidate relations,Bingham、Herschel-Bulkley、Casson和触变结构动力学等备选关系如何取舍,C,"## Fixed baseline
+
+`run_fixed_baseline_eval` provides a deterministic reference path over the
+normalized yield schema. It is an engineering baseline, not an Agent-generated
+model and not a substitute for an external holdout.
+
+## Candidate benchmark
+
+`run_candidate_benchmark` evaluates candidate strategies with the repository's
+benchmark implementation and records a selection audit. Candidate selection
+must compare like-for-like folds and cannot rely only on a generated rationale.","## 固定基线
+
+`run_fixed_baseline_eval` 在规范化屈服应力数据模式上提供一条确定性的参考路径。它是工程基线，不是 Agent 生成的模型，也不能替代外部留出集。
+
+## 候选方案评测
+
+`run_candidate_benchmark` 使用仓库中的基准实现评估候选策略，并记录选择审计。候选方案必须在相同的数据折上进行同口径比较，不能只依赖生成的文字理由进行选择。",1,medium,候选同折评测可辅助方案取舍，但没有各流变关系的选择要求。,0,high,评估工具，不相关,1,1,感觉部分相关，里面提到了评估候选的一个策略，和问题有相关性
+safety_docker:B,safety_docker,Docker sandbox network disabled CPU memory pids API keys,Docker沙箱如何禁用网络、限制CPU、内存和进程数，并避免写入API密钥,B,"## Cancellation
+
+Long-running OperationAgent subprocesses start in a separate process group.
+Cancellation or timeout sends termination to the group and escalates to a kill
+signal after a grace period. This covers descendants created by that operation;
+ordinary synchronous Python tools still stop only at their supported boundary.
+
+## Secret handling
+
+Tool arguments, results, and event payloads pass through redaction before
+sensitive values are persisted. Authorization headers, API keys, passwords,
+database URLs, email addresses, and phone-like values are covered by the
+current redaction checks. Redaction reduces exposure but is not encryption.","## 取消执行
+
+长时间运行的 OperationAgent 子进程在独立进程组中启动。取消或超时时，系统会向整个进程组发送终止信号，并在宽限期后升级为强制杀死信号。这会覆盖该操作创建的后代进程；普通同步 Python 工具仍然只能在其支持的边界停止。
+
+## 密钥处理
+
+工具参数、结果和事件载荷在敏感值持久化前都会经过脱敏。当前脱敏检查覆盖 Authorization 请求头、API 密钥、密码、数据库 URL、邮箱地址和类似电话号码的值。脱敏可以降低暴露风险，但不等同于加密。",1,high,涉及进程控制和 API 密钥脱敏，但未说明 Docker 资源、网络及镜像限制。,0,medium,取消和脱敏，不是沙箱隔离,1,0,说的取消执行和密钥处理，但是未回答问题
+data_supported_layouts:B,data_supported_layouts,Lian Zhou supported column layouts Phi d_s_um powder,Lian和Zhou数据布局支持哪些列，如Phi、d_s_um和powder,B,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.","## 单位与数据模式检查
+
+仅有列别名并不足够。一次运行应保留目标变量的单位，检查数值类型转换，报告缺失情况，并拒绝不受支持的数据模式，而不是静默猜测目标列。屈服应力预测值应当是有限且非负的。
+
+## 分布漂移
+
+随机划分无法代表所有部署场景。当数据中存在不同批次、配方、粉体类型或采集时期时，应考虑按组或按时间留出验证。模型可能在随机划分下得分很好，却仍然无法泛化到新的配方领域。",1,medium,提供数据模式和列别名检查要求，但未列出 Lian、Zhou 支持的列。,0,medium,讲检查规则，没有列布局,1,0,没有提到那两篇相关的论文或者是内容
+eval_oof:A,eval_oof,为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置,为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置,A,"## Units and schema checks
+
+Column aliases alone are insufficient. A run should preserve the target unit,
+check numeric coercion, report missingness, and reject an unsupported schema
+instead of silently guessing the target. Yield-stress predictions are expected
+to be finite and non-negative.
+
+## Distribution shift
+
+Random folds do not represent every deployment scenario. When batches,
+formulations, powder types, or acquisition periods exist, grouped or temporal
+holdouts should be considered. A model can score well under random splits and
+still fail on a new formulation domain.","## 单位与数据模式检查
+
+仅有列别名并不足够。一次运行应保留目标变量的单位，检查数值类型转换，报告缺失情况，并拒绝不受支持的数据模式，而不是静默猜测目标列。屈服应力预测值应当是有限且非负的。
+
+## 分布漂移
+
+随机划分无法代表所有部署场景。当数据中存在不同批次、配方、粉体类型或采集时期时，应考虑按组或按时间留出验证。模型可能在随机划分下得分很好，却仍然无法泛化到新的配方领域。",1,high,讨论随机划分的泛化局限及分组时间留出，但未说明训练拟合和配置记录。,0,medium,与题目无关,1,0,可能问题背景与分布漂移那块有一点相关性，但是没有回答问题
+eval_metrics:E,eval_metrics,RMSE MAE R2 negative held-out metric interpretation,如何解读留出集上的RMSE、MAE、R2以及负R2,E,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.","# YieldMind 领域种子知识
+
+YODEL 是一类屈服应力机理，用于描述致密悬浮体系的静态屈服应力与固相体积分数、最大堆积密度 `phi_m` 以及颗粒接触网络效应之间的关系。在本仓库中，只有当现有数据列支持堆积类特征时，才将其视为候选机理。
+
+当生成模型声称某个物理机理提升了预测效果时，必须进行机理消融。应在相同协议下比较 `with_mechanism` 与 `without_mechanism`，记录 RMSE 和 R2 的变化量，并避免把很小的提升描述成强有力的物理验证。",1,high,提供 RMSE、R2 变化的解读边界，缺少各指标含义及负 R2 说明。,0,medium,不相关,1,1,提到了测试这两个数据并进行记录，但是没有说如何解读
+eval_candidate_benchmark:A,eval_candidate_benchmark,run_candidate_benchmark selection audit compare folds,run_candidate_benchmark如何在相同数据折上比较候选方案并保留选择审计,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.","# YieldMind 领域种子知识
+
+YODEL 是一类屈服应力机理，用于描述致密悬浮体系的静态屈服应力与固相体积分数、最大堆积密度 `phi_m` 以及颗粒接触网络效应之间的关系。在本仓库中，只有当现有数据列支持堆积类特征时，才将其视为候选机理。
+
+当生成模型声称某个物理机理提升了预测效果时，必须进行机理消融。应在相同协议下比较 `with_mechanism` 与 `without_mechanism`，记录 RMSE 和 R2 的变化量，并避免把很小的提升描述成强有力的物理验证。",1,medium,提供相同协议下的机理对照评测原则，未说明指定工具和选择审计。,0,high,与题目无关,1,0,不同的背景，没有什么相关性，未回答问题
+mechanism_lian:A,mechanism_lian,Lian Phi SP_percent Tau0_Pa effective packing state,Lian风格的Phi、SP_percent、Tau0_Pa和有效堆积状态是什么关系,A,"# YieldMind Domain Seed
+
+YODEL is a yield-stress mechanism family that relates the static yield stress
+of dense suspensions to solid volume fraction, maximum packing density `phi_m`,
+and contact-network effects. In this repository it is treated as a candidate
+mechanism only when the available columns support packing-style features.
+
+Mechanism ablation is required when a generated model claims that a physics
+mechanism improves prediction. The same protocol should compare
+`with_mechanism` and `without_mechanism`, record delta RMSE and delta R2, and
+avoid presenting marginal gains as strong physical validation.","# YieldMind 领域种子知识
+
+YODEL 是一类屈服应力机理，用于描述致密悬浮体系的静态屈服应力与固相体积分数、最大堆积密度 `phi_m` 以及颗粒接触网络效应之间的关系。在本仓库中，只有当现有数据列支持堆积类特征时，才将其视为候选机理。
+
+当生成模型声称某个物理机理提升了预测效果时，必须进行机理消融。应在相同协议下比较 `with_mechanism` 与 `without_mechanism`，记录 RMSE 和 R2 的变化量，并避免把很小的提升描述成强有力的物理验证。",1,medium,说明体积分数、堆积状态与屈服应力的一般关系，缺少 Lian 与减水剂掺量关系。,0,medium,讲YODEL和消融，不是Lian,1,1,说明了 UO 之间会存在一定的关系，但是并没有回答问题里面的关系，所以我标记了一个相关
+mechanism_lian:E,mechanism_lian,Lian Phi SP_percent Tau0_Pa effective packing state,Lian风格的Phi、SP_percent、Tau0_Pa和有效堆积状态是什么关系,E,"# Yield Data Contract And Leakage Controls
+
+Scope: project constraints from `knowledge/yield_domain.py`,
+`knowledge/yield_schema.py`, and the workflow validation code.
+
+## Supported layouts
+
+The Lian-style layout maps `Phi` and `SP_percent` to target `Tau0_Pa`. The
+Zhou-style layout maps `phi`, `d_s_um`, and optional `powder` to target
+`tau_Pa`. A future industrial layout may include `phi`, `d50`, `sigma_d`,
+`Emix`, temperature, and target `yield_stress`.","# 屈服应力数据契约与泄漏控制
+
+范围：来自 `knowledge/yield_domain.py`、`knowledge/yield_schema.py` 以及工作流验证代码的项目约束。
+
+## 支持的数据布局
+
+Lian 风格数据将 `Phi` 和 `SP_percent` 映射到目标 `Tau0_Pa`。Zhou 风格数据将 `phi`、`d_s_um` 以及可选的 `powder` 映射到目标 `tau_Pa`。未来的工业数据布局可能包含 `phi`、`d50`、`sigma_d`、`Emix`、温度以及目标 `yield_stress`。",1,high,明确 Phi、SP_percent 到 Tau0_Pa 的输入目标映射，但未解释有效堆积状态。,2,medium,给出了Phi、SP_percent到Tau0_Pa的映射,1,1,里面提到了问题风格的 Phi 和它的参数，但是没有回答对应的问题只做背景
+mechanism_claim_boundary:A,mechanism_claim_boundary,一个看起来合理的物理公式是否足以证明模型预测有提升,一个看起来合理的物理公式是否足以证明模型预测有提升,A,"YieldMind keeps external evidence separate from generated claims. A report that
+uses a mechanism should cite concrete knowledge chunks, source paths, document
+versions, and index versions. A chunk ID proves traceability, not semantic
+truth; whether the text truly supports a claim still needs a labeled check or
+human review.",YieldMind 将外部证据与生成式结论分开处理。使用某种机理的报告应引用具体的知识块、来源路径、文档版本和索引版本。chunk ID 只能证明证据可追溯，不能证明语义上真实成立；文本是否确实支持某项结论，仍然需要带标签的检查或人工复核。,1,medium,说明机理引用与生成结论之间仍需语义核验，但未说明预测提升的实证要求。,0,medium,讲的是引用证据，不是机理结论,1,0,回答与问题无关
+mechanism_claim_boundary:B,mechanism_claim_boundary,一个看起来合理的物理公式是否足以证明模型预测有提升,一个看起来合理的物理公式是否足以证明模型预测有提升,B,"# Rheology Mechanism Candidates
+
+Scope: project knowledge derived from `knowledge/yield_domain.py`. These notes
+describe candidate mechanisms and implementation constraints. They are not a
+claim that any mechanism has already improved a held-out metric.
+
+## YODEL candidate
+
+The repository records YODEL as a candidate family for dense suspension yield
+stress. It links solid volume fraction `phi`, a maximum packing state `phi_m`,
+and particle contact-network effects. A YODEL-style relation should only be
+used when the available columns and units support the mapped variables.","# 流变机理候选
+
+范围：来自 `knowledge/yield_domain.py` 的项目知识。这些说明描述候选机理及实现约束，并不声称任何机理已经提升了留出集指标。
+
+## YODEL 候选
+
+仓库把 YODEL 记录为致密悬浮体系屈服应力的一类候选机理。它关联固相体积分数 `phi`、最大堆积状态 `phi_m` 和颗粒接触网络效应。只有现有数据列和单位能够支持相应变量映射时，才应使用 YODEL 风格关系。",2,medium,明确指出候选机理及其约束说明并不代表留出指标已有提升，回应了公式本身不能证明预测收益。,1,medium,声明没有证明机理改善指标，部分相关,1,1,问题和回答有一定的背景关系，但是没有回答问题
+agent_tool_registry:E,agent_tool_registry,Tool Registry Pydantic schema invalid parameters unknown tools,Tool Registry和Pydantic Schema如何处理非法参数和未知工具,E,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.","# Agent 编排与工具契约
+
+范围：当前 YieldMind StateGraph 和 Function Calling 的边界。
+
+## 领域 StateGraph
+
+领域工作流为准备、数据处理、需求分析、搜索、候选生成、模型生成、执行前审查、执行、结果审查和结束设置了明确节点。条件边用于控制有上限的修改和取消流程，而不是依赖无上限的对话循环。",0,high,介绍工作流节点和条件边，未涉及工具注册或参数校验。,1,low,属于工具契约范围，但没写校验细节,1,0,没有回答问题
+agent_offline_live:A,agent_offline_live,offline rule planner real Function Calling allow_live_llm model counts,离线规则规划器和真实Function Calling如何区分，allow_live_llm和模型调用次数如何记录,A,"# Agent Orchestration And Tool Contracts
+
+Scope: current YieldMind StateGraph and Function Calling boundaries.
+
+## Domain StateGraph
+
+The domain workflow uses explicit nodes for preparation, data handling,
+requirements, search, candidate generation, model generation, pre-execution,
+operation, review, and finish. Conditional edges control bounded revision and
+cancellation rather than relying on an unbounded conversational loop.","# Agent 编排与工具契约
+
+范围：当前 YieldMind StateGraph 和 Function Calling 的边界。
+
+## 领域 StateGraph
+
+领域工作流为准备、数据处理、需求分析、搜索、候选生成、模型生成、执行前审查、执行、结果审查和结束设置了明确节点。条件边用于控制有上限的修改和取消流程，而不是依赖无上限的对话循环。",0,high,介绍 StateGraph 编排，未区分离线规则与真实模型调用。,1,low,只是编排范围说明,1,1,背景相关，但是未实际回答问题

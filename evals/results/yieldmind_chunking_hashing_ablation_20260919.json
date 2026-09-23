@@ -1,0 +1,60 @@
+{
+  "status": "passed",
+  "evaluation_kind": "chunking_candidate_screen_with_offline_hashing",
+  "case_count": 30,
+  "top_k": 5,
+  "embedding_profile": "local_hashing_v1",
+  "baseline": {
+    "split_version": "format_aware_recursive_chars_700_80_v3",
+    "chunk_count": 39,
+    "hybrid": {
+      "recall_at_5": 0.9,
+      "mrr": 0.836111111111111,
+      "top_1": 0.8,
+      "mean_latency_ms": 33.54973333333332
+    },
+    "source_report": "agent_workspace/yieldmind/chunking_ablation/recursive_chars_v3_700_80.json"
+  },
+  "candidates": [
+    {
+      "split_version": "section_aware_blocks_450_60_v4",
+      "chunk_count": 40,
+      "hybrid": {
+        "recall_at_5": 0.9,
+        "mrr": 0.836111111111111,
+        "top_1": 0.8,
+        "mean_latency_ms": 28.316599999999998
+      }
+    },
+    {
+      "split_version": "section_aware_blocks_700_80_v4",
+      "chunk_count": 39,
+      "hybrid": {
+        "recall_at_5": 0.9,
+        "mrr": 0.8416666666666667,
+        "top_1": 0.8,
+        "mean_latency_ms": 28.09266666666667
+      }
+    },
+    {
+      "split_version": "section_aware_blocks_900_120_v4",
+      "chunk_count": 39,
+      "hybrid": {
+        "recall_at_5": 0.9,
+        "mrr": 0.8416666666666667,
+        "top_1": 0.8,
+        "mean_latency_ms": 27.5906
+      }
+    }
+  ],
+  "provisional_choice": "section_aware_blocks_700_80_v4",
+  "decision": "promote_for_local_index_and_pooled-human-evaluation",
+  "limitations": [
+    "This is a fast deterministic hashing screen, not a Qwen embedding result.",
+    "The old 0.8333/0.8083 comparison report used recursive_chars_1200_180_v1 and is not the same-parameter v3 baseline.",
+    "The legacy source-and-term regression labels are not a pooled human Gold set for the new chunk boundaries.",
+    "A pooled blind review across v3 and v4 candidates is required before claiming a human-judged retrieval improvement."
+  ],
+  "real_llm_calls": 0,
+  "simulated_model_calls": 0
+}

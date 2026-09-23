@@ -1,0 +1,21 @@
+{
+  "version": "yieldmind-chunking-pool-config-v1",
+  "systems": [
+    {
+      "system_id": "recursive_chars_v3_700_80",
+      "report_path": "agent_workspace/yieldmind/chunking_ablation/recursive_chars_v3_700_80.json",
+      "retrieval_mode": "hybrid",
+      "split_strategy": "recursive_chars_v3",
+      "chunk_size": 700,
+      "chunk_overlap": 80
+    },
+    {
+      "system_id": "section_aware_v4_700_80",
+      "report_path": "agent_workspace/yieldmind/chunking_ablation/section_aware_v4_700_80.json",
+      "retrieval_mode": "hybrid",
+      "split_strategy": "section_aware_v4",
+      "chunk_size": 700,
+      "chunk_overlap": 80
+    }
+  ]
+}

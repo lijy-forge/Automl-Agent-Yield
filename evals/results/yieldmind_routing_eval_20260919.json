@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "evaluation_kind": "deterministic_corpus_routing_and_persistent_index_smoke",
+  "benchmark_version": "yieldmind-routing-intent-v1",
+  "case_count": 32,
+  "final": {
+    "routing_accuracy": 1.0,
+    "accuracy_by_expected_corpus": {
+      "all": 1.0,
+      "literature": 1.0,
+      "project": 1.0
+    },
+    "forced_route_rate_on_ambiguous": 0.0,
+    "persistent_index_passed": 32,
+    "persistent_index_case_count": 32,
+    "corpus_purity_rate": 1.0,
+    "corpus_purity_case_count": 21
+  },
+  "pre_fix_observation": {
+    "case_count": 30,
+    "routing_accuracy": 0.9,
+    "failed_case_ids": [
+      "literature_vane",
+      "literature_gels",
+      "mixed_index_domain"
+    ],
+    "note": "This diagnostic preceded the final two boundary-regression cases and is not a same-case metric delta."
+  },
+  "changes": [
+    "Latin route terms now require token boundaries, preventing api in rapid and redis in redistribution from causing false project routes.",
+    "The literature vocabulary now covers curated-corpus language including SAOS, BreakPro, rheometer, shear rate, plug flow, wall slip, yielding liquids, solid volume fraction, DOI, and research/review paper intent.",
+    "Ambiguous or balanced queries remain unforced and search all corpora. Explicit corpus filters still take precedence."
+  ],
+  "embedding_profile": "local_hashing_v1",
+  "limitations": [
+    "The routing labels evaluate corpus intent, not semantic answer relevance.",
+    "The 32 cases are repository-maintained regression cases, not production traffic.",
+    "Corpus purity follows from metadata filtering and does not prove that the returned chunks answer the query."
+  ],
+  "real_llm_calls": 0,
+  "simulated_model_calls": 0
+}

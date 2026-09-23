@@ -1,0 +1,130 @@
+{
+  "version": "yieldmind-retrieval-dual-review-v1",
+  "manifest": {
+    "version": "yieldmind-retrieval-blind-review-v1",
+    "retrieval_report_sha256": "3718871a6dff7f000a953169c5ded5c955a88e2c56fadabe9a0b69d4b34ff59e",
+    "retrieval_mode": "hybrid",
+    "row_count": 150
+  },
+  "reviewers": {
+    "reviewer_1": {
+      "row_count": 150,
+      "case_count": 30,
+      "source_reviewer_ids": {
+        "reviewer_1": 150
+      },
+      "relevance_distribution": {
+        "0": 69,
+        "2": 35,
+        "1": 46
+      },
+      "confidence_distribution_raw": {
+        "high": 118,
+        "middle": 32
+      },
+      "confidence_alias_normalizations": 32,
+      "notes_filled": 150,
+      "source_file": "yieldmind_retrieval_review_reviewer_1.csv",
+      "source_sha256": "0a56b9814130ae8fbd2631ccb750e09a70e5a86c2e562edd0a06c1fe2f232ff7",
+      "metrics": {
+        "case_count": 30,
+        "recall_at_5_direct": 1.0,
+        "mrr_direct": 0.9194444444444444,
+        "mrr_partial": 0.961111111111111,
+        "top1_direct": 0.8666666666666667,
+        "top1_partial": 0.9333333333333333,
+        "ndcg_at_5": 0.943542312783792,
+        "cases_without_direct": []
+      }
+    },
+    "reviewer_3": {
+      "row_count": 150,
+      "case_count": 30,
+      "source_reviewer_ids": {
+        "reviewer_1": 150
+      },
+      "relevance_distribution": {
+        "0": 85,
+        "2": 35,
+        "1": 30
+      },
+      "confidence_distribution_raw": {
+        "high": 90,
+        "medium": 53,
+        "low": 7
+      },
+      "confidence_alias_normalizations": 0,
+      "notes_filled": 145,
+      "source_file": "yieldmind_retrieval_review_reviewer_3_annotated.csv",
+      "source_sha256": "80bbbfd9f51454b35f887e14c51877a6f38f7957ed4bb1bad50dbe7d7bd82a6d",
+      "metrics": {
+        "case_count": 30,
+        "recall_at_5_direct": 1.0,
+        "mrr_direct": 0.8972222222222221,
+        "mrr_partial": 0.961111111111111,
+        "top1_direct": 0.8333333333333334,
+        "top1_partial": 0.9333333333333333,
+        "ndcg_at_5": 0.9320839536911643,
+        "cases_without_direct": []
+      }
+    }
+  },
+  "agreement": {
+    "exact_count": 126,
+    "exact_rate": 0.84,
+    "disagreement_count": 24,
+    "severe_0_vs_2_count": 0,
+    "linear_weighted_cohen_kappa": 0.8146240988671473,
+    "quadratic_weighted_cohen_kappa": 0.8807947019867549,
+    "confusion_matrix": {
+      "labels": [
+        0,
+        1,
+        2
+      ],
+      "rows": "reviewer_1",
+      "columns": "reviewer_3",
+      "values": [
+        [
+          67,
+          2,
+          0
+        ],
+        [
+          18,
+          26,
+          2
+        ],
+        [
+          0,
+          2,
+          33
+        ]
+      ]
+    },
+    "normalized_confidence_agreement": 0.6466666666666666,
+    "notes_exact_match_count": 0
+  },
+  "conservative_consensus": {
+    "rule": "minimum relevance label from the two reviewers; not a substitute for adjudication",
+    "metrics": {
+      "case_count": 30,
+      "recall_at_5_direct": 0.9666666666666667,
+      "mrr_direct": 0.8861111111111111,
+      "mrr_partial": 0.961111111111111,
+      "top1_direct": 0.8333333333333334,
+      "top1_partial": 0.9333333333333333,
+      "ndcg_at_5": 0.9396594599864591,
+      "cases_without_direct": [
+        "safety_redaction"
+      ]
+    }
+  },
+  "adjudication": {
+    "required": true,
+    "row_count": 24,
+    "note": "Do not average ordinal labels. Resolve each disagreement against the rubric."
+  },
+  "real_llm_calls": 0,
+  "simulated_model_calls": 0
+}

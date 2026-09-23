@@ -11,3 +11,15 @@
 
 逐行根据 `query`、英文原文和中文辅助翻译判断。不要根据候选编号猜测检索排名，不要修改 `reviewer_id`、`row_id`、`case_id`、`query`、`query_zh`、`candidate_code`、英文或中文文本。
 完成前确认每一行的 `relevance` 和 `confidence` 都已填写。CSV 使用 UTF-8 BOM，可直接用 Excel 打开。
+
+## 双人标注分析与裁决
+
+双人标注完成后，运行 `scripts/analyze_yieldmind_retrieval_reviews.py` 校验候选文本哈希、不可编辑字段和标签完整性，并生成一致性报告与裁决表。分析脚本不会改写原始 CSV。
+
+裁决时只编辑 `yieldmind_retrieval_review_adjudication.csv` 的 `adjudicated_relevance` 和 `adjudication_notes`：
+
+- `adjudicated_relevance` 仍使用 `0`、`1`、`2`，需要根据原问题、候选英文原文和标注规则重新判断。
+- `adjudication_notes` 简短说明采用该等级的依据；不要通过平均、四舍五入或按置信度自动决定。
+- 两位标注一致的行无需再次填写；两份原始标注文件均保持不变。
+
+裁决完成后，运行 `scripts/finalize_yieldmind_retrieval_review.py`。脚本会重新计算原始分歧并拒绝保护字段改动、漏填和非法标签，随后生成完整 Gold Label CSV、最终指标和 Top-1 Bad Case。最终报告明确记录所有输入文件哈希以及 `real_llm_calls=0`。

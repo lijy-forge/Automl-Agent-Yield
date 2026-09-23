@@ -1,0 +1,83 @@
+{
+  "status": "passed",
+  "benchmark_version": "yieldmind-reranker-gold-v1",
+  "evaluation_kind": "second_stage_embedding_cosine_rerank_ablation",
+  "full_report": {
+    "path": "agent_workspace/yieldmind/reranker_evals/reranker_eval_20260919_114217.json",
+    "sha256": "c2ca1fc53aabd35c14d7348d22f9b1ae5de216ecb7fd91b77a28002d2238daef"
+  },
+  "gold_input": {
+    "path": "evals/review/yieldmind_retrieval_gold.csv",
+    "sha256": "fec54e5319323e776688dc8465701c2a2873377327c34c8c297ad88019cb2838",
+    "row_count": 150,
+    "case_count": 30,
+    "candidate_scope": "adjudicated hybrid Top-5 candidates only"
+  },
+  "model": {
+    "scorer_kind": "embedding_cosine",
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "max_length": 2048,
+    "device": "cpu",
+    "model_download_allowed": false
+  },
+  "inference": {
+    "pair_count": 150,
+    "unique_query_count": 30,
+    "unique_document_count": 20,
+    "batch_size": 16,
+    "model_load_duration_seconds": 7.2225,
+    "inference_duration_seconds": 27.7413,
+    "mean_pair_latency_ms": 184.9422,
+    "process_peak_rss_bytes": 3460259840
+  },
+  "original_metrics": {
+    "recall_at_5_direct": 0.9666666666666667,
+    "mrr_direct": 0.8861111111111112,
+    "top1_direct": 0.8333333333333334,
+    "ndcg_at_5": 0.9409141277914462
+  },
+  "reranked_metrics": {
+    "recall_at_5_direct": 0.9666666666666667,
+    "mrr_direct": 0.8388888888888889,
+    "top1_direct": 0.7666666666666667,
+    "ndcg_at_5": 0.8921026291811764
+  },
+  "metric_deltas": {
+    "recall_at_5_direct": 0.0,
+    "mrr_direct": -0.047222222222222276,
+    "top1_direct": -0.06666666666666665,
+    "ndcg_at_5": -0.04881149861026979
+  },
+  "top1_changes": {
+    "changed_case_count": 5,
+    "direct_relevance_promoted_to_top1": 0,
+    "direct_relevance_demoted_from_top1": 2,
+    "changed_cases": [
+      "eval_ablation",
+      "evidence_embedding_profile",
+      "evidence_lifecycle",
+      "safety_argv",
+      "safety_redaction"
+    ]
+  },
+  "decision": {
+    "default_retrieval_changed": false,
+    "result": "do_not_enable",
+    "reason": "Cosine re-sorting degraded MRR, Top-1, and nDCG on the fixed Gold labels. This is an embedding-score ablation, not a cross-encoder result."
+  },
+  "cross_encoder_status": {
+    "model_id": "Qwen/Qwen3-Reranker-0.6B",
+    "revision": "204631fece3ea330da97bf0175d0a907d910df20",
+    "result": "not_run_model_unavailable",
+    "reason": "The pinned model was not cached and the approved download attempt failed with No route to host."
+  },
+  "real_llm_calls": 0,
+  "real_reranker_model_calls": 0,
+  "real_embedding_scoring_pairs": 150,
+  "limitations": [
+    "The 30 queries are project-authored rather than sampled production traffic.",
+    "Only the saved Top-5 candidates can be reordered, so missed relevant chunks cannot be recovered.",
+    "The completed experiment uses bi-encoder cosine scores and must not be described as a cross-encoder reranker evaluation."
+  ]
+}

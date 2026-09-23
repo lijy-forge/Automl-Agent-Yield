@@ -1,0 +1,165 @@
+{
+  "version": "yieldmind-retrieval-final-gold-v1",
+  "inputs": {
+    "reviewer_a": {
+      "name": "reviewer_1",
+      "file": "yieldmind_retrieval_review_reviewer_1.csv",
+      "sha256": "0a56b9814130ae8fbd2631ccb750e09a70e5a86c2e562edd0a06c1fe2f232ff7"
+    },
+    "reviewer_b": {
+      "name": "reviewer_3",
+      "file": "yieldmind_retrieval_review_reviewer_3_annotated.csv",
+      "sha256": "80bbbfd9f51454b35f887e14c51877a6f38f7957ed4bb1bad50dbe7d7bd82a6d"
+    },
+    "manifest": {
+      "file": "yieldmind_retrieval_review_reviewer_1_manifest.json",
+      "sha256": "a9225df07c9637700f86b22fae26f96272cb31d9c9c5cd790c33bb0eaac862dc"
+    },
+    "adjudication": {
+      "file": "yieldmind_retrieval_review_adjudication.csv",
+      "sha256": "517b960c0f5511ab1dcf975bddf0a2e31a720a009e8b4e05338857371a965500"
+    }
+  },
+  "agreement": {
+    "exact_count": 126,
+    "exact_rate": 0.84,
+    "disagreement_count": 24,
+    "severe_0_vs_2_count": 0,
+    "linear_weighted_cohen_kappa": 0.8146240988671473,
+    "quadratic_weighted_cohen_kappa": 0.8807947019867549,
+    "confusion_matrix": {
+      "labels": [
+        0,
+        1,
+        2
+      ],
+      "rows": "reviewer_1",
+      "columns": "reviewer_3",
+      "values": [
+        [
+          67,
+          2,
+          0
+        ],
+        [
+          18,
+          26,
+          2
+        ],
+        [
+          0,
+          2,
+          33
+        ]
+      ]
+    },
+    "normalized_confidence_agreement": 0.6466666666666666,
+    "notes_exact_match_count": 0
+  },
+  "adjudication": {
+    "row_count": 24,
+    "label_distribution": {
+      "0": 12,
+      "1": 12
+    },
+    "resolved_to_reviewer_a": 10,
+    "resolved_to_reviewer_b": 14,
+    "complete": true
+  },
+  "final_gold": {
+    "row_count": 150,
+    "case_count": 30,
+    "relevance_distribution": {
+      "0": 79,
+      "1": 38,
+      "2": 33
+    },
+    "metrics": {
+      "case_count": 30,
+      "recall_at_5_direct": 0.9666666666666667,
+      "mrr_direct": 0.8861111111111111,
+      "mrr_partial": 0.961111111111111,
+      "top1_direct": 0.8333333333333334,
+      "top1_partial": 0.9333333333333333,
+      "ndcg_at_5": 0.9409141277914463,
+      "cases_without_direct": [
+        "safety_redaction"
+      ]
+    },
+    "top1_bad_case_count": 5
+  },
+  "bad_cases": [
+    {
+      "case_id": "agent_multi_role",
+      "query": "迁移到图编排后原来的多个智能体职责是否仍然保留，价值体现在哪里",
+      "query_zh": "迁移到图编排后原来的多个智能体职责是否仍然保留，价值体现在哪里",
+      "top1_row_id": "agent_multi_role:A",
+      "top1_relevance": 1,
+      "top1_chunk_id": "chk_bb76b261a8871a6f98978611",
+      "top1_source_path": "knowledge_sources/agent_orchestration.md",
+      "first_direct_rank": 4,
+      "first_direct_row_id": "agent_multi_role:E",
+      "first_direct_chunk_id": "chk_102c206e0718e36806e6c191",
+      "first_direct_source_path": "knowledge_sources/agent_orchestration.md",
+      "failure_type": "ranking_error"
+    },
+    {
+      "case_id": "data_leakage_denylist",
+      "query": "target leakage denylist phi_max m1_true m1_lf",
+      "query_zh": "目标泄漏禁用列：phi_max、m1_true和m1_lf",
+      "top1_row_id": "data_leakage_denylist:D",
+      "top1_relevance": 1,
+      "top1_chunk_id": "chk_52f2ba692bacbb742b6b32bb",
+      "top1_source_path": "knowledge_sources/data_contract_and_leakage.md",
+      "first_direct_rank": 2,
+      "first_direct_row_id": "data_leakage_denylist:B",
+      "first_direct_chunk_id": "chk_220fc99f7e66a262e1923c1f",
+      "first_direct_source_path": "knowledge_sources/data_contract_and_leakage.md",
+      "failure_type": "ranking_error"
+    },
+    {
+      "case_id": "eval_oof",
+      "query": "为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置",
+      "query_zh": "为什么不能用训练集拟合分数证明泛化能力，交叉验证还要记录哪些配置",
+      "top1_row_id": "eval_oof:E",
+      "top1_relevance": 0,
+      "top1_chunk_id": "chk_5dcb4ed6e4118342f8a66e2b",
+      "top1_source_path": "knowledge_sources/yieldmind_domain_seed.md",
+      "first_direct_rank": 3,
+      "first_direct_row_id": "eval_oof:D",
+      "first_direct_chunk_id": "chk_ee86d3ed14e0bc4501c22492",
+      "first_direct_source_path": "knowledge_sources/evaluation_and_ablation.md",
+      "failure_type": "ranking_error"
+    },
+    {
+      "case_id": "safety_argv",
+      "query": "argument vector avoid shell true metacharacters",
+      "query_zh": "为什么要使用参数向量并避免shell=True和shell元字符",
+      "top1_row_id": "safety_argv:A",
+      "top1_relevance": 0,
+      "top1_chunk_id": "chk_5dcb4ed6e4118342f8a66e2b",
+      "top1_source_path": "knowledge_sources/yieldmind_domain_seed.md",
+      "first_direct_rank": 2,
+      "first_direct_row_id": "safety_argv:D",
+      "first_direct_chunk_id": "chk_c806476811a3eb5f0ab1c483",
+      "first_direct_source_path": "knowledge_sources/execution_and_safety.md",
+      "failure_type": "ranking_error"
+    },
+    {
+      "case_id": "safety_redaction",
+      "query": "redact authorization api keys passwords database URLs email phone",
+      "query_zh": "如何脱敏Authorization、API密钥、密码、数据库URL、邮箱和电话",
+      "top1_row_id": "safety_redaction:E",
+      "top1_relevance": 1,
+      "top1_chunk_id": "chk_820bd08a247c94994a2437e1",
+      "top1_source_path": "knowledge_sources/execution_and_safety.md",
+      "first_direct_rank": null,
+      "first_direct_row_id": null,
+      "first_direct_chunk_id": null,
+      "first_direct_source_path": null,
+      "failure_type": "no_direct_candidate_in_top5"
+    }
+  ],
+  "real_llm_calls": 0,
+  "simulated_model_calls": 0
+}

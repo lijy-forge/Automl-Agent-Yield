@@ -1,0 +1,62 @@
+{
+  "evaluation_name": "yieldmind_chunking_top1_single_reviewer",
+  "evaluation_date": "2026-09-21",
+  "candidate_scope": "top1_union",
+  "reviewer_count": 1,
+  "reviewer_id": "reviewer_1",
+  "review_file": "evals/review/yieldmind_chunking_top1_review_reviewer_1.csv",
+  "review_file_sha256": "29c71181f48e2577b76fe35351ae6cb355eb8efe9976f9c0850a24076a9fec9a",
+  "manifest": "agent_workspace/yieldmind/retrieval_reviews/yieldmind_chunking_top1_manifest_20260919.json",
+  "manifest_sha256": "22a1366810df6677fd91a4170820ad99476592a55612fe9e1ad5a1259e5a4a6e",
+  "validation": {
+    "row_count": 32,
+    "case_count": 30,
+    "blank_relevance": 0,
+    "blank_confidence": 0,
+    "notes_filled": 14,
+    "relevance_distribution": {
+      "0": 7,
+      "1": 7,
+      "2": 18
+    },
+    "confidence_distribution": {
+      "high": 28,
+      "medium": 4
+    },
+    "candidate_text_hashes_valid": true
+  },
+  "systems": {
+    "recursive_chars_v3_700_80": {
+      "top1_direct": 0.6,
+      "top1_partial": 0.8333333333333334
+    },
+    "section_aware_v4_700_80": {
+      "top1_direct": 0.6,
+      "top1_partial": 0.8333333333333334
+    }
+  },
+  "comparison": {
+    "same_candidate_count": 28,
+    "different_candidate_count": 2,
+    "recursive_chars_v3_wins": 0,
+    "section_aware_v4_wins": 0,
+    "ties": 30,
+    "top1_direct_delta_section_aware_minus_recursive": 0.0,
+    "different_candidate_cases": {
+      "agent_multi_role": {
+        "recursive_chars_v3_relevance": 0,
+        "section_aware_v4_relevance": 0
+      },
+      "eval_oof": {
+        "recursive_chars_v3_relevance": 0,
+        "section_aware_v4_relevance": 0
+      }
+    }
+  },
+  "decision": "no_observed_top1_gain",
+  "limitations": [
+    "This is a single-reviewer quick screen, not a two-reviewer adjudicated Gold set.",
+    "The top1_union package can support only Top-1 comparison; Recall@5, MRR and nDCG are not claimable from this result.",
+    "The result does not justify switching the default chunking strategy on retrieval quality alone."
+  ]
+}
