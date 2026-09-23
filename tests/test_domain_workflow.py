@@ -649,7 +649,9 @@ def test_domain_artifact_map_includes_generated_code_and_final_outputs(tmp_path:
     expected = {
         "logs/models/generated_model.py": "MODEL_SPEC = {}\n",
         "logs/mechanisms/generated_mechanism.py": "MECHANISM_SPEC = {}\n",
-        "metrics/free_search_report.json": "{}\n",
+        "metrics/free_search_report.json": json.dumps(
+            {"champion": {"spec": {"model_family": "generated_model"}}}
+        ),
         "metrics/predictions.csv": "y_true,y_pred\n1,1\n",
         "metrics/recommendations.md": "# Recommendation\n",
         "predict.py": "print('predict')\n",
@@ -670,6 +672,7 @@ def test_domain_artifact_map_includes_generated_code_and_final_outputs(tmp_path:
     assert artifacts["predictions"].endswith("metrics/predictions.csv")
     assert artifacts["predict_script"].endswith("predict.py")
     assert artifacts["champion_model"].endswith("trained_models/champion.joblib")
+    assert artifacts["champion_model_source"].endswith("logs/models/generated_model.py")
 
 
 def test_run_artifact_api_enriches_historical_result_and_serves_allowlisted_file(

@@ -361,6 +361,7 @@ def _runtime_contract() -> dict[str, Any]:
 
 
 def _artifact_map(run_dir: Path) -> dict[str, str]:
+    report_path = run_dir / "metrics" / "free_search_report.json"
     candidates = {
         "manager_run_config": run_dir / "manager_run_config.json",
         "manager_trace": run_dir / "manager_trace.json",
@@ -377,7 +378,7 @@ def _artifact_map(run_dir: Path) -> dict[str, str]:
         "run_result": run_dir / "run_result.json",
         "post_execution_review": run_dir / "post_execution_review.json",
         "manager_revision_notes": run_dir / "manager_revision_notes.json",
-        "final_metrics": run_dir / "metrics" / "free_search_report.json",
+        "final_metrics": report_path,
         "predictions": run_dir / "metrics" / "predictions.csv",
         "recommendations": run_dir / "metrics" / "recommendations.md",
         "predict_script": run_dir / "predict.py",
@@ -387,6 +388,15 @@ def _artifact_map(run_dir: Path) -> dict[str, str]:
         candidates[f"generated_model_{path.stem}"] = path
     for path in sorted((run_dir / "logs" / "mechanisms").glob("*.py")):
         candidates[f"generated_mechanism_{path.stem}"] = path
+    if report_path.exists():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            model_id = str((((report.get("champion") or {}).get("spec") or {}).get("model_family")) or "")
+            champion_source = run_dir / "logs" / "models" / f"{model_id}.py"
+            if model_id and champion_source.exists():
+                candidates["champion_model_source"] = champion_source
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
     return {name: str(path.resolve()) for name, path in candidates.items() if path.exists()}
 
 

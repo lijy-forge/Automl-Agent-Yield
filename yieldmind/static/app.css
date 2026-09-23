@@ -152,6 +152,8 @@ textarea { min-height: 92px; resize: vertical; line-height: 1.5; }
 .pipeline-node p { margin: 9px 0 6px; color: var(--text); font-size: 10px; line-height: 1.45; }
 .pipeline-node code { display: block; color: var(--blue); font-size: 9px; overflow-wrap: anywhere; }
 .pipeline-node em { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; font-style: normal; }
+.pipeline-branch { margin-top: 9px; border-top: 1px solid var(--line); padding-top: 8px; }
+.pipeline-branch b { display: block; margin-bottom: 4px; color: var(--amber); font-size: 9px; }
 .pipeline-arrow { width: 26px; color: var(--muted); text-align: center; }
 .pipeline-node.running { border-top: 3px solid var(--blue); background: #f8fbff; }
 .pipeline-node.passed { border-top: 3px solid var(--accent); }

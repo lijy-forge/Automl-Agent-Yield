@@ -493,8 +493,9 @@ function renderDomainOverview(result) {
     ? `隔离进程正常回传，用时 ${formatNumber(process.duration_seconds, 1)} 秒；未触发超时、取消或强制终止。`
     : process.termination_signal || process.error || "尚无进程控制结果。";
   const importantArtifacts = [
-    ["final_metrics", "指标"], ["final_predictions", "预测"], ["champion_model", "模型"],
-    ["predict_script", "推理代码"], ["run_result", "完整结果"],
+    ["final_metrics", "评测报告 (.json)"], ["predictions", "预测结果 (.csv)"],
+    ["champion_model", "训练模型 (.joblib)"], ["champion_model_source", "冠军源码 (.py)"],
+    ["predict_script", "推理脚本 (.py)"], ["run_result", "完整结果 (.json)"],
   ].filter(([name]) => result?.artifacts?.[name]);
   const artifactLinks = importantArtifacts.map(([name, label]) =>
     `<a class="artifact-chip" href="/api/runs/${encodeURIComponent(result.run_id)}/artifacts/${encodeURIComponent(name)}" target="_blank" rel="noopener">${label}</a>`
@@ -539,12 +540,18 @@ function renderPipeline(result) {
     const decision = decisionIndex >= 0 ? decisions[decisionIndex] : null;
     if (decisionIndex >= 0) usedDecisionIndexes.add(decisionIndex);
     const duration = Number(stage.duration_ms);
-    const route = decision ? `${decision.after_stage} → ${decision.next_node}` : index < stages.length - 1 ? `${stage.stage} → ${stages[index + 1].stage}` : "流程终点";
+    const normalReasons = new Set(["phase_completed", "pre_execution_approved", "operation_completed", "review_accepted", "cancellation_finalized"]);
+    const showBranch = Boolean(decision?.reason_code && !normalReasons.has(decision.reason_code));
+    const message = String(stage.message || "").trim();
+    const genericMessages = new Set([`${stage.stage} completed.`, `${stage.stage} completed`]);
+    const showMessage = Boolean(message && !genericMessages.has(message));
+    const details = [
+      showMessage ? `<p>${escapeHtml(message)}</p>` : "",
+      showBranch ? `<div class="pipeline-branch"><b>分叉</b><code>${escapeHtml(decision.after_stage)} → ${escapeHtml(decision.next_node)}</code><em>${escapeHtml(decision.reason || decision.reason_code)}</em></div>` : "",
+    ].join("");
+    const nodeBody = `<span class="node-index">${String(index + 1).padStart(2, "0")} · ${escapeHtml(stage.status)}</span><strong>${escapeHtml(STAGE_LABELS[stage.stage] || stage.stage)}</strong><small>${escapeHtml(stage.agent || "Agent Manager")} · 尝试 ${escapeHtml(stage.attempt || 1)}${Number.isFinite(duration) ? ` · ${formatNumber(duration, 0)} ms` : ""}</small>`;
     return `<div class="pipeline-step">
-      <details class="pipeline-node ${escapeHtml(stage.status)}">
-        <summary><span class="node-index">${String(index + 1).padStart(2, "0")} · ${escapeHtml(stage.status)}</span><strong>${escapeHtml(STAGE_LABELS[stage.stage] || stage.stage)}</strong><small>${escapeHtml(stage.agent || "Agent Manager")} · 尝试 ${escapeHtml(stage.attempt || 1)}${Number.isFinite(duration) ? ` · ${formatNumber(duration, 0)} ms` : ""}</small></summary>
-        <p>${escapeHtml(stage.message || "节点已完成")}</p><code>${escapeHtml(route)}</code>${decision?.reason_code ? `<em>${escapeHtml(decision.reason_code)}</em>` : ""}
-      </details>${index < stages.length - 1 ? '<span class="pipeline-arrow" aria-hidden="true">→</span>' : ""}
+      ${details ? `<details class="pipeline-node ${escapeHtml(stage.status)}"><summary>${nodeBody}</summary>${details}</details>` : `<div class="pipeline-node ${escapeHtml(stage.status)}">${nodeBody}</div>`}${index < stages.length - 1 ? '<span class="pipeline-arrow" aria-hidden="true">→</span>' : ""}
     </div>`;
   }).join("") : '<div class="empty-panel">暂无节点记录</div>';
 }
@@ -604,7 +611,12 @@ function renderArtifacts(result) {
     const extension = String(path).split(".").pop().toUpperCase();
     const href = result?.run_id ? `/api/runs/${encodeURIComponent(result.run_id)}/artifacts/${encodeURIComponent(name)}` : "";
     const label = extension === "JOBLIB" || extension === "CSV" ? "下载" : "查看";
-    return `<div class="artifact-row"><strong>${escapeHtml(name)}</strong><code>${escapeHtml(path)}</code>${href ? `<a class="artifact-link" href="${href}" target="_blank" rel="noopener">${label} ${escapeHtml(extension)}</a>` : `<span>${escapeHtml(extension)}</span>`}</div>`;
+    const displayName = name === "champion_model" ? "训练后冠军模型（序列化文件）"
+      : name === "champion_model_source" ? "冠军模型 Python 源码"
+      : name.startsWith("generated_model_") ? `LLM 候选模型源码 · ${name.slice("generated_model_".length)}`
+      : name === "predict_script" ? "冠军模型推理脚本"
+      : name;
+    return `<div class="artifact-row"><strong>${escapeHtml(displayName)}</strong><code>${escapeHtml(path)}</code>${href ? `<a class="artifact-link" href="${href}" target="_blank" rel="noopener">${label} ${escapeHtml(extension)}</a>` : `<span>${escapeHtml(extension)}</span>`}</div>`;
   }).join("") : '<div class="empty-panel">暂无运行产物</div>';
 }
 function renderTrace(result) {
