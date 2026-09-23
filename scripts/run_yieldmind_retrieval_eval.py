@@ -128,6 +128,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
                 index_version=profile.index_version,
                 chunk_size=args.chunk_size,
                 chunk_overlap=args.chunk_overlap,
+                split_strategy=args.split_strategy,
             )
         )
         failures = [item for item in ingest["documents"] if item.get("status") != "available"]
@@ -173,6 +174,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "document_count": len(ingest["documents"]),
             "chunk_count": sum(int(item.get("chunk_count", 0)) for item in ingest["documents"]),
             "split_version": ingest["split_version"],
+            "split_strategy": ingest["split_strategy"],
             "chunk_size": ingest["chunk_size"],
             "chunk_overlap": ingest["chunk_overlap"],
             "collection": ingest["collection"],
@@ -206,6 +208,11 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--chunk-size", type=int, default=700)
     parser.add_argument("--chunk-overlap", type=int, default=80)
+    parser.add_argument(
+        "--split-strategy",
+        choices=("recursive_chars_v3", "section_aware_v4"),
+        default="recursive_chars_v3",
+    )
     parser.add_argument("--embedding-provider", choices=("local_hashing", "sentence_transformers"), default="local_hashing")
     parser.add_argument("--model-id", default="")
     parser.add_argument("--model-revision", default="", help="Required immutable revision/commit for model profiles.")

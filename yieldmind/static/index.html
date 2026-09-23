@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YieldMind 实验工作台</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260920-6">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-block">
+      <div class="brand-mark">YM</div>
+      <div><h1>YieldMind</h1><p>屈服应力建模 Agent</p></div>
+    </div>
+    <div class="runtime-status" aria-label="依赖状态">
+      <span class="status-item" id="status-api"><i></i>API</span>
+      <span class="status-item" id="status-db"><i></i>Database</span>
+      <span class="status-item" id="status-redis"><i></i>Redis</span>
+      <span class="status-item" id="status-knowledge"><i></i>Knowledge</span>
+      <button class="icon-button" id="refresh-health" type="button" title="刷新依赖状态" aria-label="刷新依赖状态">↻</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="control-rail">
+      <section class="rail-section run-config">
+        <div class="section-title-row"><h2>新建 Agent 任务</h2><span class="mode-label">真实领域链路</span></div>
+        <label for="prompt">任务目标</label>
+        <textarea id="prompt">为高固含浆料屈服应力预测生成并执行 AutoML 方案。先分析数据与需求，再生成候选模型和实施计划；执行生成代码，出现错误时按反馈修复，最后由 Manager 复核结果。</textarea>
+        <label for="data-path">数据 CSV</label>
+        <div class="dataset-picker">
+          <div class="dataset-current"><span id="dataset-kind">默认数据</span><strong id="dataset-name">正在读取...</strong><small id="dataset-meta">等待后端校验</small></div>
+          <input id="data-path" placeholder="留空时生成确定性演示数据" aria-label="当前 CSV 路径">
+          <input id="csv-upload" type="file" accept=".csv,text/csv">
+          <button class="secondary-button upload-button" id="upload-csv" type="button">上传并使用 CSV</button>
+        </div>
+        <div class="field-grid">
+          <div><label for="domain-llm">LLM Provider</label><select id="domain-llm"><option value="ark" selected>Ark / DashScope</option><option value="openai">OpenAI</option><option value="custom">Custom</option></select></div>
+          <div><label for="execution-mode">执行模式</label><select id="execution-mode"><option value="free_search" selected>Free Search</option><option value="plugin">Plugin</option><option value="llm_freeform">LLM Freeform</option></select></div>
+          <div><label for="revision-rounds">Manager 修订轮次</label><input id="revision-rounds" type="number" min="0" max="5" value="1"></div>
+          <div><label for="operation-attempts">执行修错次数</label><input id="operation-attempts" type="number" min="1" max="10" value="3"></div>
+        </div>
+        <label class="toggle-row" for="domain-knowledge-search"><span>启用知识库 Hybrid + RRF</span><input id="domain-knowledge-search" type="checkbox" checked></label>
+        <label class="toggle-row" for="external-search"><span>启用外部搜索</span><input id="external-search" type="checkbox"></label>
+        <label class="toggle-row live-authorization" for="allow-live-llm"><span>确认调用真实 LLM 并执行生成代码</span><input id="allow-live-llm" type="checkbox"></label>
+        <button class="primary-button" id="run-workflow" type="button">启动真实 Agent 流程</button>
+        <div class="run-feedback" id="run-feedback">等待提交</div>
+      </section>
+
+      <details class="rail-section utility-section" id="offline-eval-section">
+        <summary>离线基线评测（非 Agent）</summary>
+        <p class="hint">仅运行固定 sklearn 基线、候选代理和报告，不调用 LLM，不生成代码，不作为 Agent 协作展示。</p>
+        <div class="field-grid">
+          <div><label for="samples">演示样本数</label><input id="samples" type="number" min="20" max="5000" value="60"></div>
+          <div><label for="folds">交叉验证</label><select id="folds"><option value="2">2 folds</option><option value="3" selected>3 folds</option><option value="5">5 folds</option></select></div>
+        </div>
+        <label class="toggle-row" for="use-knowledge"><span>检索领域知识</span><input id="use-knowledge" type="checkbox"></label>
+        <div id="knowledge-options" hidden>
+          <label for="knowledge-query">知识查询</label><input id="knowledge-query" value="YODEL packing yield stress phi_m">
+          <label for="retrieval-mode">检索模式</label><select id="retrieval-mode"><option value="hybrid">Hybrid</option><option value="vector">Vector</option><option value="bm25">BM25+</option></select>
+        </div>
+        <button class="secondary-button offline-eval-button" id="run-offline-eval" type="button">运行离线评测</button>
+        <div class="run-feedback" id="offline-eval-feedback">尚未运行</div>
+      </details>
+
+      <section class="rail-section recent-section">
+        <div class="section-title-row"><h2>最近运行</h2><button class="text-button" id="refresh-runs" type="button">刷新</button></div>
+        <div class="recent-runs" id="recent-runs"><div class="empty-compact">暂无运行记录</div></div>
+      </section>
+
+      <details class="rail-section utility-section">
+        <summary>知识检索</summary>
+        <label for="quick-query">查询</label><input id="quick-query" value="YODEL packing yield stress phi_m">
+        <button class="secondary-button" id="search-knowledge" type="button">检索 Top 5</button>
+      </details>
+
+      <details class="rail-section utility-section" id="queue-section">
+        <summary>任务队列与恢复</summary>
+        <label for="task-samples">样本数</label><input id="task-samples" type="number" min="20" max="5000" value="40">
+        <div class="button-row"><button class="secondary-button" id="enqueue-task" type="button">提交</button><button class="secondary-button" id="refresh-task" type="button">刷新</button></div>
+        <label for="cancel-reason">取消原因</label><input id="cancel-reason" value="用户请求取消任务">
+        <button class="danger-button" id="cancel-task" type="button">请求取消</button>
+        <label class="toggle-row" for="worker-stopped"><span>已确认旧 Worker 停止</span><input id="worker-stopped" type="checkbox"></label>
+        <label for="recovery-reason">恢复原因</label><input id="recovery-reason" value="旧 worker 已停止，创建新任务恢复">
+        <div class="button-row"><button class="secondary-button" id="list-stale" type="button">检查失联</button><button class="danger-button" id="recover-task" type="button">创建恢复任务</button></div>
+        <div class="utility-output" id="task-box">尚未提交任务</div>
+      </details>
+
+      <details class="rail-section utility-section">
+        <summary>Tool Registry</summary>
+        <label for="tool-select">工具</label><select id="tool-select"></select>
+        <label for="tool-args">参数 JSON</label><textarea id="tool-args" class="code-input">{}</textarea>
+        <button class="secondary-button" id="call-tool" type="button">调用工具</button>
+      </details>
+    </aside>
+
+    <main class="workspace">
+      <section class="run-heading">
+        <div><div class="eyebrow">实验运行</div><h2 id="run-title">尚未选择运行</h2><p id="run-subtitle">从左侧启动新实验，或打开一条历史记录。</p></div>
+        <div class="run-state" id="run-state" data-state="idle">Idle</div>
+      </section>
+
+      <section class="metric-strip" aria-label="核心指标">
+        <div class="metric-cell"><span id="metric-label-r2">OOF R²</span><strong id="metric-r2">--</strong><small id="metric-note-r2">最终推荐</small></div>
+        <div class="metric-cell"><span id="metric-label-rmse">OOF RMSE</span><strong id="metric-rmse">--</strong><small id="metric-note-rmse">越低越好</small></div>
+        <div class="metric-cell"><span id="metric-label-mae">OOF MAE</span><strong id="metric-mae">--</strong><small id="metric-note-mae">绝对误差</small></div>
+        <div class="metric-cell"><span id="metric-label-mape">OOF MAPE</span><strong id="metric-mape">--</strong><small id="metric-note-mape">百分比误差</small></div>
+      </section>
+
+      <section class="workspace-section agent-activity-section">
+        <div class="section-heading">
+          <div><h3>多 Agent 实时协作</h3><p>真实领域 Agent 的工作、路由、代码执行和修订过程会在这里持续滚动展示。</p></div>
+          <span class="live-indicator" id="agent-live-state" data-state="idle"><i></i><span>等待运行</span></span>
+        </div>
+        <div class="collaboration-toolbar">
+          <div><strong id="activity-count">0 events</strong><span id="behavior-summary">暂无 Agent 行为记录</span></div>
+          <div class="behavior-controls">
+            <label for="behavior-agent-filter">角色</label><select id="behavior-agent-filter"><option value="all">全部角色</option></select>
+            <label for="behavior-type-filter">类型</label><select id="behavior-type-filter"><option value="all">全部类型</option><option value="action">Agent 动作</option><option value="decision">Manager 路由</option></select>
+            <label for="behavior-status-filter">状态</label><select id="behavior-status-filter"><option value="all">全部状态</option><option value="running">执行中</option><option value="passed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select>
+            <label class="autoscroll-control" for="agent-autoscroll"><input id="agent-autoscroll" type="checkbox" checked> 自动滚动</label>
+            <button class="secondary-button compact-button" id="export-agent-audit" type="button">导出审计</button>
+          </div>
+        </div>
+        <div class="agent-layout">
+          <aside class="agent-grid" id="agent-grid"></aside>
+          <div class="behavior-list agent-message-stream" id="agent-behavior-list"><div class="empty-panel">启动真实 Agent 流程后显示工作消息。</div></div>
+        </div>
+      </section>
+
+      <section class="workspace-section pipeline-section">
+        <div class="section-heading">
+          <div><h3>StateGraph 执行轨迹</h3><p id="pipeline-summary">等待运行数据</p></div>
+          <span class="section-meta" id="workflow-backend">--</span>
+        </div>
+        <div class="pipeline" id="pipeline"><div class="empty-panel">运行后显示节点状态、修复回环和终止结果。</div></div>
+      </section>
+
+      <section class="analysis-grid" id="offline-analysis">
+        <div class="workspace-section candidate-section">
+          <div class="section-heading">
+            <div><h3>候选策略与选择过程</h3><p id="selection-summary">等待候选评测</p></div>
+            <span class="section-meta" id="candidate-count">0 candidates</span>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>候选策略</th><th>模型 / 机理</th><th>OOF RMSE</th><th>OOF R²</th><th>审计分</th><th>结论</th></tr></thead><tbody id="candidate-table"><tr><td colspan="6" class="empty-table">暂无候选评测</td></tr></tbody></table></div>
+        </div>
+        <div class="workspace-section prediction-section">
+          <div class="section-heading">
+            <div><h3>实际值 vs 预测值</h3><p id="prediction-caption">最终推荐模型的 OOF 预测</p></div>
+            <span class="legend"><i></i>样本 <b></b>理想线</span>
+          </div>
+          <div class="chart-frame"><canvas id="prediction-chart" aria-label="实际值与预测值散点图"></canvas><div class="chart-empty" id="chart-empty">运行完成后显示真实 OOF 预测点</div></div>
+        </div>
+      </section>
+
+      <section class="workspace-section domain-overview" id="domain-overview" hidden>
+        <div class="section-heading">
+          <div><h3>领域工作流结果</h3><p>展示审批、Operation 执行、Manager review 与修订闭环，不使用离线模型指标占位。</p></div>
+          <span class="section-meta" id="domain-result-mode">--</span>
+        </div>
+        <div class="decision-layout" id="domain-decision-audit"><div class="empty-panel">暂无领域运行结果</div></div>
+      </section>
+
+      <section class="workspace-section detail-section">
+        <div class="tab-list" role="tablist">
+          <button class="tab active" type="button" data-tab="baselines">固定基线</button>
+          <button class="tab" type="button" data-tab="decision">选择审计</button>
+          <button class="tab" type="button" data-tab="artifacts">运行产物</button>
+          <button class="tab" type="button" data-tab="trace">逐步 Trace</button>
+          <button class="tab" type="button" data-tab="raw">原始结果</button>
+        </div>
+        <div class="tab-panel active" id="tab-baselines"><div class="table-wrap"><table><thead><tr><th>固定基线</th><th>OOF RMSE</th><th>OOF MAE</th><th>OOF R²</th><th>MAPE</th></tr></thead><tbody id="baseline-table"><tr><td colspan="5" class="empty-table">暂无基线结果</td></tr></tbody></table></div></div>
+        <div class="tab-panel" id="tab-decision"><div class="decision-layout" id="decision-audit"><div class="empty-panel">暂无选择审计</div></div></div>
+        <div class="tab-panel" id="tab-artifacts"><div class="artifact-list" id="artifact-list"><div class="empty-panel">暂无运行产物</div></div></div>
+        <div class="tab-panel" id="tab-trace"><div class="trace-list" id="trace-list"><div class="empty-panel">暂无 Trace</div></div></div>
+        <div class="tab-panel" id="tab-raw"><pre class="raw-output" id="raw-output">等待运行数据...</pre></div>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js?v=20260921-1"></script>
+</body>
+</html>

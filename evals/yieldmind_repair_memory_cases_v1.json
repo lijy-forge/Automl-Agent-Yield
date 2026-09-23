@@ -1,0 +1,166 @@
+{
+  "version": "yieldmind-repair-memory-eval-v1",
+  "label_scope": "Curated synthetic contract cases for retrieval and safety guardrails; not production repair-success evidence.",
+  "thresholds": {
+    "min_top1_accuracy": 0.8,
+    "min_recall_at_k": 1.0,
+    "min_safe_abstention_rate": 1.0,
+    "min_guardrail_rejection_accuracy": 1.0,
+    "max_misleading_hit_rate": 0.0
+  },
+  "limitations": [
+    "All v1 fixtures are curated synthetic contract cases rather than independently sampled production failures.",
+    "reuse_outcome is not_observed, so repair-success rate must remain null until real or controlled workflow evidence is added.",
+    "The default embedding is deterministic hashing and is not a semantic-model quality claim."
+  ],
+  "memories": [
+    {
+      "id": "mem_nan_imputation",
+      "error": "ValueError: estimator input contains NaN in fold 3",
+      "repair_summary": "Apply fold-local imputation before estimator fitting.",
+      "applicability": {"dataset_schema": "generated_yield_process_202607", "dataset_role": "augmented_development", "target_column": "yield_stress", "feature_signature": "features_67_v1"}
+    },
+    {
+      "id": "mem_categorical_dtype",
+      "error": "TypeError: categorical column material_type has object dtype",
+      "repair_summary": "Encode categorical columns inside each training fold.",
+      "applicability": {"dataset_schema": "lian2025_table6_full", "dataset_role": "observed_development", "target_column": "yield_stress", "feature_signature": "features_lian4_v1"}
+    },
+    {
+      "id": "mem_managed_timeout",
+      "error": "TimeoutError: managed subprocess exceeded 900 seconds and was terminated",
+      "repair_summary": "Reduce the bounded search budget and terminate the complete process group.",
+      "applicability": {"execution_backend": "managed_subprocess", "platform_system": "Darwin", "platform_machine": "x86_64"}
+    },
+    {
+      "id": "mem_missing_metrics",
+      "error": "Missing required artifact metrics.json after training",
+      "repair_summary": "Write metrics.json atomically before returning success.",
+      "applicability": {"operation_contract_version": "yieldmind-operation-contract-v1"}
+    },
+    {
+      "id": "mem_sklearn_api",
+      "error": "ImportError: scikit-learn version removed estimator API",
+      "repair_summary": "Use the estimator constructor supported by the pinned dependency version.",
+      "applicability": {"python_version": "3.11.13", "dependency_versions": {"numpy": "1.26.4", "pandas": "2.1.4", "scikit-learn": "1.4.2"}}
+    },
+    {
+      "id": "mem_embedding_unavailable",
+      "error": "ConnectionError: loopback embedding service unavailable at endpoint",
+      "repair_summary": "Check embedding readiness and fall back to the declared deterministic profile.",
+      "applicability": {}
+    },
+    {
+      "id": "mem_leakage_guard",
+      "error": "Data leakage guard rejected preprocessing fitted before cross validation",
+      "repair_summary": "Fit every preprocessing transform inside each training fold.",
+      "applicability": {}
+    },
+    {
+      "id": "mem_expired_numpy_alias",
+      "error": "AttributeError: numpy API removed legacy alias",
+      "repair_summary": "Replace the removed alias using the API supported by the pinned NumPy version.",
+      "applicability": {"python_version": "3.11.13", "dependency_versions": {"numpy": "1.26.4"}},
+      "verified_age_days": 120
+    }
+  ],
+  "cases": [
+    {
+      "id": "rank_nan_exact",
+      "category": "ranking",
+      "query": "ValueError: model fit failed because estimator input contains NaN",
+      "applicability": {"dataset_schema": "generated_yield_process_202607", "dataset_role": "augmented_development", "target_column": "yield_stress", "feature_signature": "features_67_v1"},
+      "expected_memory_ids": ["mem_nan_imputation"]
+    },
+    {
+      "id": "rank_nan_bilingual",
+      "category": "ranking",
+      "query": "训练时报 ValueError，输入矩阵含 NaN，需要检查插补",
+      "applicability": {"dataset_schema": "generated_yield_process_202607", "dataset_role": "augmented_development", "target_column": "yield_stress", "feature_signature": "features_67_v1"},
+      "expected_memory_ids": ["mem_nan_imputation"]
+    },
+    {
+      "id": "rank_categorical_dtype",
+      "category": "ranking",
+      "query": "TypeError object dtype in categorical material_type column",
+      "applicability": {"dataset_schema": "lian2025_table6_full", "dataset_role": "observed_development", "target_column": "yield_stress", "feature_signature": "features_lian4_v1"},
+      "expected_memory_ids": ["mem_categorical_dtype"]
+    },
+    {
+      "id": "rank_timeout",
+      "category": "ranking",
+      "query": "Operation process timed out after the subprocess exceeded its bounded runtime",
+      "applicability": {"execution_backend": "managed_subprocess", "platform_system": "Darwin", "platform_machine": "x86_64"},
+      "expected_memory_ids": ["mem_managed_timeout"]
+    },
+    {
+      "id": "rank_missing_artifact",
+      "category": "ranking",
+      "query": "Training returned success but required artifact metrics.json is missing",
+      "applicability": {"operation_contract_version": "yieldmind-operation-contract-v1"},
+      "expected_memory_ids": ["mem_missing_metrics"]
+    },
+    {
+      "id": "rank_dependency_api",
+      "category": "ranking",
+      "query": "ImportError estimator API is incompatible with installed scikit-learn version",
+      "applicability": {"python_version": "3.11.9", "dependency_versions": {"numpy": "1.26.2", "pandas": "2.1.1", "scikit-learn": "1.4.0"}},
+      "expected_memory_ids": ["mem_sklearn_api"]
+    },
+    {
+      "id": "rank_embedding_service",
+      "category": "ranking",
+      "query": "ConnectionError from unavailable loopback embedding endpoint",
+      "expected_memory_ids": ["mem_embedding_unavailable"]
+    },
+    {
+      "id": "rank_leakage_guard",
+      "category": "ranking",
+      "query": "preprocessing was fitted before cross validation and triggered leakage guard",
+      "expected_memory_ids": ["mem_leakage_guard"]
+    },
+    {
+      "id": "reject_cross_workspace",
+      "category": "workspace_guardrail",
+      "query": "ValueError estimator input contains NaN",
+      "workspace_id": "other_workspace",
+      "expected_memory_ids": [],
+      "forbidden_memory_ids": ["mem_nan_imputation"]
+    },
+    {
+      "id": "reject_execution_mode",
+      "category": "mode_guardrail",
+      "query": "ValueError estimator input contains NaN",
+      "execution_mode": "plugin",
+      "expected_memory_ids": [],
+      "forbidden_memory_ids": ["mem_nan_imputation"]
+    },
+    {
+      "id": "reject_schema_mismatch",
+      "category": "applicability_guardrail",
+      "query": "ValueError estimator input contains NaN",
+      "applicability": {"dataset_schema": "other_schema", "dataset_role": "observed_development", "target_column": "tau0", "feature_signature": "other_features"},
+      "expected_memory_ids": [],
+      "forbidden_memory_ids": ["mem_nan_imputation"],
+      "expected_rejection_reasons": ["applicability_mismatch"]
+    },
+    {
+      "id": "reject_dependency_mismatch",
+      "category": "applicability_guardrail",
+      "query": "ImportError estimator API incompatible with scikit-learn version",
+      "applicability": {"python_version": "3.12.1", "dependency_versions": {"numpy": "2.0.0", "pandas": "2.2.0", "scikit-learn": "1.5.0"}},
+      "expected_memory_ids": [],
+      "forbidden_memory_ids": ["mem_sklearn_api"],
+      "expected_rejection_reasons": ["applicability_mismatch"]
+    },
+    {
+      "id": "reject_expired_memory",
+      "category": "freshness_guardrail",
+      "query": "AttributeError numpy API removed legacy alias",
+      "applicability": {"python_version": "3.11.9", "dependency_versions": {"numpy": "1.26.2"}},
+      "expected_memory_ids": [],
+      "forbidden_memory_ids": ["mem_expired_numpy_alias"],
+      "expected_rejection_reasons": ["verification_expired"]
+    }
+  ]
+}

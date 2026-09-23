@@ -19,7 +19,7 @@ from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import RepeatedKFold
+from sklearn.model_selection import GroupKFold, RepeatedKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -92,15 +92,27 @@ def _evaluate_factory(
     n_splits: int,
     n_repeats: int,
     random_state: int,
+    groups: np.ndarray | None = None,
     uses_mechanism_constraint: bool = False,
     notes: str = "",
 ) -> dict[str, Any]:
-    splitter = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=random_state)
+    if groups is not None:
+        unique_groups = np.unique(groups)
+        if len(unique_groups) < 2:
+            raise ValueError("Grouped OOF requires at least two unique groups.")
+        n_splits = min(int(n_splits), int(len(unique_groups)))
+        splitter = GroupKFold(n_splits=n_splits)
+        split_iterator = splitter.split(X, y, groups)
+        split_strategy = "group_kfold"
+    else:
+        splitter = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=random_state)
+        split_iterator = splitter.split(X)
+        split_strategy = "repeated_kfold" if int(n_repeats) > 1 else "kfold"
     fold_metrics: list[dict[str, float]] = []
     oof_sum = np.zeros(len(y), dtype=float)
     oof_count = np.zeros(len(y), dtype=float)
 
-    for train_idx, val_idx in splitter.split(X):
+    for train_idx, val_idx in split_iterator:
         model = factory()
         model.fit(X[train_idx], y[train_idx])
         pred = np.asarray(model.predict(X[val_idx]), dtype=float)
@@ -122,6 +134,8 @@ def _evaluate_factory(
         "fixed_baseline": True,
         "uses_mechanism_constraint": bool(uses_mechanism_constraint),
         "notes": notes,
+        "split_strategy": split_strategy,
+        "n_unique_groups": int(len(np.unique(groups))) if groups is not None else None,
         "mean_rmse": float(np.mean([m["rmse"] for m in fold_metrics])),
         "std_rmse": float(np.std([m["rmse"] for m in fold_metrics])),
         "mean_mae": float(np.mean([m["mae"] for m in fold_metrics])),
@@ -134,6 +148,7 @@ def _evaluate_factory(
         "oof_mae": float(mean_absolute_error(y, oof_pred)),
         "oof_r2": float(r2_score(y, oof_pred)),
         "oof_mape": _mape(y, oof_pred),
+        "_oof_predictions": oof_pred.tolist(),
     }
 
 
@@ -147,6 +162,8 @@ def run_fixed_yield_baselines(
     n_splits: int = 5,
     n_repeats: int = 1,
     random_state: int = 42,
+    groups: Any | None = None,
+    group_column: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate stable baselines under the primary OOF protocol.
 
@@ -221,6 +238,24 @@ def run_fixed_yield_baselines(
     if not np.all(np.isfinite(y)):
         raise ValueError(f"Target column {target_column!r} contains non-finite values.")
 
+    group_values: np.ndarray | None = None
+    resolved_group_column = str(group_column or "").strip() or None
+    if isinstance(groups, str):
+        resolved_group_column = groups
+        groups = None
+    if groups is None and resolved_group_column:
+        if resolved_group_column not in df.columns:
+            raise ValueError(f"Group column not found in dataframe: {resolved_group_column}")
+        groups = df[resolved_group_column]
+    if groups is not None:
+        group_values = np.asarray(groups).reshape(-1).astype(str)
+        if len(group_values) != len(df):
+            raise ValueError(
+                f"Group length {len(group_values)} does not match feature rows {len(df)}."
+            )
+        if int(n_repeats) != 1:
+            raise ValueError("Grouped OOF currently requires n_repeats=1.")
+
     baselines: list[tuple[str, Callable[[], RegressorMixin], bool, str]] = [
         (
             "baseline_mean_dummy",
@@ -288,21 +323,51 @@ def run_fixed_yield_baselines(
             n_splits=n_splits,
             n_repeats=n_repeats,
             random_state=random_state,
+            groups=group_values,
             uses_mechanism_constraint=uses_mechanism,
             notes=notes,
         )
         for name, factory, uses_mechanism, notes in baselines
     ]
-    best = min(results, key=lambda item: item["mean_rmse"])
-    protocol = (
-        f"{n_splits}-fold OOF"
-        if int(n_repeats) == 1
-        else f"Repeated {n_splits}-fold OOF ({n_repeats} repeats)"
+    best = min(results, key=lambda item: item["oof_rmse"])
+    best_oof_predictions = list(best.get("_oof_predictions") or [])
+    preview_indices = np.linspace(0, len(df) - 1, num=min(len(df), 200), dtype=int)
+    sample_ids = (
+        df["sample_id"].astype(str).tolist()
+        if "sample_id" in df.columns
+        else [str(index) for index in range(len(df))]
     )
+    best_prediction_preview = [
+        {
+            "sample_index": int(index),
+            "sample_id": sample_ids[index],
+            "y_true": float(y[index]),
+            "y_pred": float(best_oof_predictions[index]),
+            "residual": float(y[index] - best_oof_predictions[index]),
+        }
+        for index in preview_indices
+    ]
+    for result in results:
+        result.pop("_oof_predictions", None)
+    if group_values is not None:
+        effective_splits = min(int(n_splits), int(len(np.unique(group_values))))
+        protocol = f"{effective_splits}-fold group OOF"
+    else:
+        protocol = (
+            f"{n_splits}-fold OOF"
+            if int(n_repeats) == 1
+            else f"Repeated {n_splits}-fold OOF ({n_repeats} repeats)"
+        )
     return BaselineResultBundle({
         "baseline_protocol": protocol,
+        "split_strategy": "group_kfold" if group_values is not None else (
+            "repeated_kfold" if int(n_repeats) > 1 else "kfold"
+        ),
+        "group_column": resolved_group_column,
+        "n_unique_groups": int(len(np.unique(group_values))) if group_values is not None else None,
         "feature_columns": list(X_df.columns),
         "enable_sp_monotonic": bool(enable_sp_monotonic),
         "baseline_results": results,
         "best_baseline": best["name"],
+        "best_baseline_prediction_preview": best_prediction_preview,
     })

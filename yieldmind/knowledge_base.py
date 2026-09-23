@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -40,9 +41,93 @@ QWEN3_QUERY_INSTRUCTION = (
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 LATIN_TOKEN_RE = re.compile(r"[a-z0-9_]+", re.IGNORECASE)
 CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
+PROJECT_ROUTE_TERMS = (
+    "agent",
+    "workflow",
+    "langgraph",
+    "tool",
+    "api",
+    "docker",
+    "celery",
+    "redis",
+    "postgres",
+    "cancel",
+    "sandbox",
+    "schema",
+    "leakage",
+    "embedding profile",
+    "index version",
+    "pydantic",
+    "fastapi",
+    "checkpoint",
+    "tool registry",
+    "task queue",
+    "token budget",
+    "redaction",
+    "yieldmind",
+    "智能体",
+    "工作流",
+    "取消",
+    "泄漏",
+    "索引",
+)
+LITERATURE_ROUTE_TERMS = (
+    "rheology",
+    "yield stress",
+    "yodel",
+    "bingham",
+    "herschel",
+    "bulkley",
+    "casson",
+    "thixotrop",
+    "suspension",
+    "cement",
+    "slurry",
+    "packing density",
+    "phi_m",
+    "superplasticizer",
+    "saos",
+    "breakpro",
+    "rheometer",
+    "shear rate",
+    "plug flow",
+    "wall slip",
+    "screen printing",
+    "yielding liquids",
+    "gels",
+    "solid volume fraction",
+    "research paper",
+    "review paper",
+    "doi",
+    "流变",
+    "屈服应力",
+    "悬浮液",
+    "水泥",
+    "浆体",
+    "堆积密度",
+)
 
 
-def split_version_for(chunk_size: int, chunk_overlap: int) -> str:
+def _route_term_occurs(query: str, term: str) -> bool:
+    """Match Latin route terms on token boundaries while retaining CJK phrase matching."""
+    normalized_query = re.sub(r"[_\-]+", " ", query.lower())
+    normalized_term = re.sub(r"[_\-]+", " ", term.lower())
+    if CJK_RUN_RE.search(normalized_term):
+        return normalized_term in normalized_query
+    pattern = r"(?<![a-z0-9])" + re.escape(normalized_term).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
+    return re.search(pattern, normalized_query) is not None
+
+
+SplitStrategy = Literal["recursive_chars_v3", "section_aware_v4"]
+
+
+def split_version_for(
+    chunk_size: int,
+    chunk_overlap: int,
+    split_strategy: SplitStrategy = "recursive_chars_v3",
+) -> str:
+    if split_strategy == "section_aware_v4":
+        return f"section_aware_blocks_{int(chunk_size)}_{int(chunk_overlap)}_v4"
     return f"format_aware_recursive_chars_{int(chunk_size)}_{int(chunk_overlap)}_v3"
 
 
@@ -56,6 +141,149 @@ def split_knowledge_text(text: str, *, chunk_size: int, chunk_overlap: int) -> l
         separators=["\n## ", "\n# ", "\n\n", "\n", "。", ". ", " ", ""],
     )
     return [chunk for chunk in splitter.split_text(text) if chunk.strip()]
+
+
+@dataclass(frozen=True)
+class KnowledgeChunkDraft:
+    text: str
+    role: str
+    token_count: int
+
+
+def _approximate_token_count(text: str) -> int:
+    latin = len(LATIN_TOKEN_RE.findall(text))
+    cjk = sum(len(run) for run in CJK_RUN_RE.findall(text))
+    return max(1, latin + cjk)
+
+
+def _chunk_role(text: str) -> str:
+    stripped = text.strip()
+    lowered = stripped.lower()
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if "```" in stripped or "~~~" in stripped:
+        return "code"
+    if len(lines) >= 2 and any("|" in line for line in lines) and any(
+        re.match(r"^\|?\s*:?-{3,}", line) for line in lines
+    ):
+        return "table"
+    if any(marker in stripped for marker in ("$$", "\\[", "\\begin{")):
+        return "formula"
+    if lines and all(re.match(r"^(?:[-*+] |\d+[.)] )", line) for line in lines):
+        return "list"
+    if any(term in lowered for term in ("must ", "must not", "required", "禁止", "必须", "不得")):
+        return "constraint"
+    if any(term in lowered for term in ("step ", "procedure", "workflow", "步骤", "流程")):
+        return "procedure"
+    if any(term in lowered for term in (" is defined", "definition", "定义", "是指")):
+        return "definition"
+    return "content"
+
+
+def _structural_blocks(text: str) -> list[str]:
+    """Split a section into paragraph-sized blocks while keeping fenced code intact."""
+    blocks: list[str] = []
+    current: list[str] = []
+    in_fence = False
+    fence_marker = ""
+
+    def flush() -> None:
+        block = "\n".join(current).strip()
+        if block:
+            blocks.append(block)
+        current.clear()
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("```", "~~~")):
+            marker = stripped[:3]
+            if not in_fence:
+                flush()
+                in_fence = True
+                fence_marker = marker
+            current.append(line)
+            if in_fence and marker == fence_marker and len(current) > 1:
+                in_fence = False
+                fence_marker = ""
+                flush()
+            continue
+        if not stripped and not in_fence:
+            flush()
+            continue
+        current.append(line)
+    flush()
+    return blocks
+
+
+def split_knowledge_section(
+    text: str,
+    *,
+    chunk_size: int,
+    chunk_overlap: int,
+    split_strategy: SplitStrategy,
+) -> list[KnowledgeChunkDraft]:
+    if split_strategy == "recursive_chars_v3":
+        return [
+            KnowledgeChunkDraft(
+                text=chunk,
+                role=_chunk_role(chunk),
+                token_count=_approximate_token_count(chunk),
+            )
+            for chunk in split_knowledge_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        ]
+
+    blocks: list[str] = []
+    for block in _structural_blocks(text):
+        role = _chunk_role(block)
+        if role in {"code", "table", "formula"} or len(block) <= chunk_size:
+            blocks.append(block)
+        else:
+            blocks.extend(
+                split_knowledge_text(block, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            )
+    if not blocks:
+        return []
+
+    packed: list[str] = []
+    current: list[str] = []
+    for block in blocks:
+        if _chunk_role(block) in {"code", "table", "formula"}:
+            if current:
+                packed.append("\n\n".join(current))
+                current = []
+            packed.append(block)
+            continue
+        proposed = "\n\n".join([*current, block])
+        if current and len(proposed) > chunk_size:
+            packed.append("\n\n".join(current))
+            overlap_blocks: list[str] = []
+            overlap_length = 0
+            for previous in reversed(current):
+                added = len(previous) + (2 if overlap_blocks else 0)
+                if overlap_blocks and overlap_length + added > chunk_overlap:
+                    break
+                if len(previous) > chunk_overlap and overlap_blocks:
+                    break
+                overlap_blocks.insert(0, previous)
+                overlap_length += added
+                if overlap_length >= chunk_overlap:
+                    break
+            current = [*overlap_blocks, block]
+            if len("\n\n".join(current)) > chunk_size:
+                current = [block]
+        else:
+            current.append(block)
+    if current:
+        packed.append("\n\n".join(current))
+
+    return [
+        KnowledgeChunkDraft(
+            text=chunk,
+            role=_chunk_role(chunk),
+            token_count=_approximate_token_count(chunk),
+        )
+        for chunk in packed
+        if chunk.strip()
+    ]
 
 
 class EmbeddingProfile(BaseModel):
@@ -126,6 +354,7 @@ class KnowledgeIngestRequest(BaseModel):
     index_version: str = DEFAULT_INDEX_VERSION
     chunk_size: int = Field(default=1200, ge=200, le=4000)
     chunk_overlap: int = Field(default=180, ge=0, le=1000)
+    split_strategy: SplitStrategy = "recursive_chars_v3"
     source_metadata: dict[str, KnowledgeSourceMetadata] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -142,6 +371,11 @@ class KnowledgeSearchRequest(BaseModel):
     document_id: str | None = None
     corpus: Literal["project", "literature"] | None = None
     retrieval_mode: Literal["vector", "bm25", "hybrid"] = "vector"
+    routing_mode: Literal["none", "auto"] = "none"
+    expand_parent: bool = False
+    parent_context_max_chars: int = Field(default=4000, ge=200, le=20000)
+    deduplicate_parents: bool = False
+    context_budget_chars: int | None = Field(default=None, ge=500, le=50000)
 
 
 class KnowledgeDeleteRequest(BaseModel):
@@ -464,7 +698,11 @@ class KnowledgeBase:
     def ingest(self, request: KnowledgeIngestRequest) -> dict[str, Any]:
         self._validate_index_version(request.index_version)
         collection = self._collection()
-        split_version = split_version_for(request.chunk_size, request.chunk_overlap)
+        split_version = split_version_for(
+            request.chunk_size,
+            request.chunk_overlap,
+            request.split_strategy,
+        )
         results: list[dict[str, Any]] = []
         for raw_path in request.paths:
             path = Path(raw_path).expanduser().resolve()
@@ -534,15 +772,32 @@ class KnowledgeBase:
                     )
                     continue
 
-                chunks: list[tuple[str, str, int | None, int | None]] = []
-                for section in loaded.sections:
-                    section_chunks = self._split(
+                chunks: list[tuple[str, str, int | None, int | None, str, str, int]] = []
+                for section_index, section in enumerate(loaded.sections):
+                    parent_id = _stable_id(
+                        document_id,
+                        document_version,
+                        split_version,
+                        section_index,
+                        _sha256_text(section.text),
+                        prefix="par_",
+                    )
+                    section_chunks = split_knowledge_section(
                         section.text,
                         chunk_size=request.chunk_size,
                         chunk_overlap=request.chunk_overlap,
+                        split_strategy=request.split_strategy,
                     )
                     chunks.extend(
-                        (chunk, section.section, section.page_start, section.page_end)
+                        (
+                            chunk.text,
+                            section.section,
+                            section.page_start,
+                            section.page_end,
+                            parent_id,
+                            chunk.role,
+                            chunk.token_count,
+                        )
                         for chunk in section_chunks
                     )
                 now = time.time()
@@ -550,11 +805,31 @@ class KnowledgeBase:
                 documents: list[str] = []
                 metadatas: list[dict[str, Any]] = []
                 db_rows: list[tuple[Any, ...]] = []
-                for idx, (chunk, section, page_start, page_end) in enumerate(chunks):
+                for idx, (
+                    chunk,
+                    section,
+                    page_start,
+                    page_end,
+                    parent_id,
+                    chunk_role,
+                    token_count,
+                ) in enumerate(chunks):
                     text_hash = _sha256_text(chunk)
                     chunk_id = _stable_id(document_id, document_version, split_version, idx, text_hash, prefix="chk_")
                     ids.append(chunk_id)
-                    documents.append(chunk)
+                    if request.split_strategy == "section_aware_v4":
+                        context_header = "\n".join(
+                            item
+                            for item in (
+                                f"Title: {title}" if title else "",
+                                f"Section: {section}" if section else "",
+                                f"Content type: {chunk_role}",
+                            )
+                            if item
+                        )
+                        documents.append(f"{context_header}\n\n{chunk}" if context_header else chunk)
+                    else:
+                        documents.append(chunk)
                     metadata = {
                         "document_id": document_id,
                         "document_version": document_version,
@@ -568,6 +843,9 @@ class KnowledgeBase:
                         "doi": source_metadata.doi,
                         "license": source_metadata.license,
                         "section": section,
+                        "parent_id": parent_id,
+                        "chunk_role": chunk_role,
+                        "token_count": token_count,
                         "text_hash": text_hash,
                         "index_version": request.index_version,
                         "split_version": split_version,
@@ -588,6 +866,11 @@ class KnowledgeBase:
                             section,
                             page_start,
                             page_end,
+                            parent_id,
+                            chunk_role,
+                            token_count,
+                            split_version,
+                            json_dumps({"split_strategy": request.split_strategy}),
                             text_hash,
                             request.index_version,
                             chunk,
@@ -649,9 +932,10 @@ class KnowledgeBase:
                         """
                         INSERT INTO yieldmind_document_chunks
                             (chunk_id, document_id, document_version, chunk_index, title,
-                             source_path, section, page_start, page_end, text_hash,
-                             index_version, text, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             source_path, section, page_start, page_end, parent_id,
+                             chunk_role, token_count, split_version, metadata_json,
+                             text_hash, index_version, text, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(chunk_id) DO UPDATE SET
                             document_id=excluded.document_id,
                             document_version=excluded.document_version,
@@ -661,6 +945,11 @@ class KnowledgeBase:
                             section=excluded.section,
                             page_start=excluded.page_start,
                             page_end=excluded.page_end,
+                            parent_id=excluded.parent_id,
+                            chunk_role=excluded.chunk_role,
+                            token_count=excluded.token_count,
+                            split_version=excluded.split_version,
+                            metadata_json=excluded.metadata_json,
                             text_hash=excluded.text_hash,
                             index_version=excluded.index_version,
                             text=excluded.text,
@@ -703,6 +992,7 @@ class KnowledgeBase:
             "embedding_profile_fingerprint": self.embedding_profile.fingerprint(),
             "embedding_model": self.embedding_profile.model_id,
             "split_version": split_version,
+            "split_strategy": request.split_strategy,
             "chunk_size": request.chunk_size,
             "chunk_overlap": request.chunk_overlap,
             "documents": results,
@@ -781,6 +1071,87 @@ class KnowledgeBase:
         return {str(row["chunk_id"]): dict(row) for row in rows}
 
     @staticmethod
+    def _route_request(request: KnowledgeSearchRequest) -> tuple[KnowledgeSearchRequest, dict[str, Any]]:
+        if request.corpus:
+            return request, {
+                "mode": request.routing_mode,
+                "resolved_corpus": request.corpus,
+                "reason": "explicit_corpus_filter",
+                "project_score": None,
+                "literature_score": None,
+            }
+        if request.routing_mode == "none":
+            return request, {
+                "mode": "none",
+                "resolved_corpus": None,
+                "reason": "routing_disabled",
+                "project_score": None,
+                "literature_score": None,
+            }
+
+        query = request.query.lower()
+        project_score = sum(1 for term in PROJECT_ROUTE_TERMS if _route_term_occurs(query, term))
+        literature_score = sum(1 for term in LITERATURE_ROUTE_TERMS if _route_term_occurs(query, term))
+        if project_score > literature_score:
+            corpus: Literal["project", "literature"] | None = "project"
+            reason = "project_terms_dominate"
+        elif literature_score > project_score:
+            corpus = "literature"
+            reason = "literature_terms_dominate"
+        else:
+            corpus = None
+            reason = "ambiguous_or_no_route_terms"
+        return request.model_copy(update={"corpus": corpus}), {
+            "mode": "auto",
+            "resolved_corpus": corpus,
+            "reason": reason,
+            "project_score": project_score,
+            "literature_score": literature_score,
+        }
+
+    @staticmethod
+    def _merge_overlapping_chunks(texts: list[str], max_chars: int) -> str:
+        if not texts:
+            return ""
+        merged = texts[0].strip()
+        for raw in texts[1:]:
+            text = raw.strip()
+            max_overlap = min(len(merged), len(text), 1000)
+            overlap = 0
+            for size in range(max_overlap, 19, -1):
+                if merged.endswith(text[:size]):
+                    overlap = size
+                    break
+            merged = f"{merged}\n\n{text[overlap:].lstrip()}" if overlap else f"{merged}\n\n{text}"
+            if len(merged) >= max_chars:
+                break
+        return merged[:max_chars]
+
+    def _expand_parent_hit(
+        self,
+        hit: dict[str, Any],
+        request: KnowledgeSearchRequest,
+    ) -> dict[str, Any]:
+        parent_id = str(hit.get("parent_id") or "")
+        if not parent_id:
+            return {**hit, "context_text": hit.get("text", ""), "context_chunk_ids": [hit["chunk_id"]]}
+        with connect(self.store.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT chunk_id, text FROM yieldmind_document_chunks
+                WHERE parent_id=? AND index_version=?
+                ORDER BY chunk_index
+                """,
+                (parent_id, request.index_version),
+            ).fetchall()
+        texts = [str(row["text"]) for row in rows]
+        return {
+            **hit,
+            "context_text": self._merge_overlapping_chunks(texts, request.parent_context_max_chars),
+            "context_chunk_ids": [str(row["chunk_id"]) for row in rows],
+        }
+
+    @staticmethod
     def _hit_from_metadata(
         *,
         chunk_id: str,
@@ -789,6 +1160,7 @@ class KnowledgeBase:
         score: float | None,
         distance: float | None = None,
     ) -> dict[str, Any]:
+        chunk_metadata = json_loads(str(metadata.get("metadata_json") or "{}"))
         return {
             "chunk_id": chunk_id,
             "document_id": metadata.get("document_id"),
@@ -801,6 +1173,11 @@ class KnowledgeBase:
             "doi": metadata.get("doi"),
             "license": metadata.get("license"),
             "section": metadata.get("section"),
+            "parent_id": metadata.get("parent_id"),
+            "chunk_role": metadata.get("chunk_role"),
+            "token_count": metadata.get("token_count"),
+            "split_version": metadata.get("split_version"),
+            "chunk_metadata": chunk_metadata,
             "page_start": metadata.get("page_start"),
             "page_end": metadata.get("page_end"),
             "chunk_index": metadata.get("chunk_index"),
@@ -819,6 +1196,14 @@ class KnowledgeBase:
             collection_count = max(1, int(collection.count()))
         except Exception:
             collection_count = candidate_k * 3
+        try:
+            matching_vectors = collection.get(where=where, include=["metadatas"])
+            matching_count = len(matching_vectors.get("ids") or [])
+        except Exception:
+            matching_count = collection_count
+        if matching_count <= 0:
+            return []
+        collection_count = min(collection_count, matching_count)
         # Interrupted writes or a mistakenly shared Chroma directory can leave
         # vectors that are not active in this SQL store. Expand only when those
         # rows starve the requested committed result count.
@@ -860,7 +1245,21 @@ class KnowledgeBase:
         chunks = self._active_chunks(request)
         if not chunks:
             return []
-        tokenized_corpus = [self._lexical_tokens(str(chunk["text"])) for chunk in chunks]
+        retrieval_texts = [
+            "\n".join(
+                value
+                for value in (
+                    str(chunk.get("title") or ""),
+                    str(chunk.get("section") or ""),
+                    str(chunk["text"]),
+                )
+                if value
+            )
+            if str(chunk.get("split_version") or "").startswith("section_aware_blocks_")
+            else str(chunk["text"])
+            for chunk in chunks
+        ]
+        tokenized_corpus = [self._lexical_tokens(text) for text in retrieval_texts]
         query_tokens = self._lexical_tokens(request.query)
         if not query_tokens:
             return []
@@ -925,28 +1324,97 @@ class KnowledgeBase:
             result.append(hit)
         return result
 
+    def _search_hits(self, request: KnowledgeSearchRequest) -> list[dict[str, Any]]:
+        candidate_k = min(60, max(request.top_k, request.top_k * 3))
+        if request.retrieval_mode == "vector":
+            return self._vector_hits(request, candidate_k=request.top_k)
+        if request.retrieval_mode == "bm25":
+            return self._bm25_hits(request, candidate_k=request.top_k)
+        # Chroma and rank_bm25 both reach NumPy during their first import.  Do
+        # that initialization on the caller thread so a cold hybrid request
+        # cannot observe a partially initialized numpy._typing module.
+        __import__("chromadb")
+        __import__("rank_bm25")
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="yieldmind-hybrid") as executor:
+            vector_future = executor.submit(self._vector_hits, request, candidate_k=candidate_k)
+            bm25_future = executor.submit(self._bm25_hits, request, candidate_k=candidate_k)
+            vector_hits = vector_future.result()
+            bm25_hits = bm25_future.result()
+        return self._rrf(vector_hits, bm25_hits, top_k=request.top_k)
+
     def search(self, request: KnowledgeSearchRequest) -> dict[str, Any]:
         self._validate_index_version(request.index_version)
         started = time.perf_counter()
-        candidate_k = min(60, max(request.top_k, request.top_k * 3))
-        if request.retrieval_mode == "vector":
-            hits = self._vector_hits(request, candidate_k=request.top_k)
-        elif request.retrieval_mode == "bm25":
-            hits = self._bm25_hits(request, candidate_k=request.top_k)
+        effective_request, routing = self._route_request(request)
+        retrieval_request = effective_request
+        if request.deduplicate_parents:
+            retrieval_request = effective_request.model_copy(
+                update={"top_k": min(20, max(request.top_k, request.top_k * 3))}
+            )
+        hits = self._search_hits(retrieval_request)
+        if request.routing_mode == "auto" and effective_request.corpus and not hits:
+            effective_request = request.model_copy(update={"corpus": None})
+            retrieval_request = effective_request
+            if request.deduplicate_parents:
+                retrieval_request = effective_request.model_copy(
+                    update={"top_k": min(20, max(request.top_k, request.top_k * 3))}
+                )
+            hits = self._search_hits(retrieval_request)
+            routing["fallback_to_all_corpora"] = True
+            routing["reason"] = f"{routing['reason']}_but_routed_corpus_empty"
         else:
-            vector_hits = self._vector_hits(request, candidate_k=candidate_k)
-            bm25_hits = self._bm25_hits(request, candidate_k=candidate_k)
-            hits = self._rrf(vector_hits, bm25_hits, top_k=request.top_k)
+            routing["fallback_to_all_corpora"] = False
+        if request.deduplicate_parents:
+            deduplicated: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for hit in hits:
+                group_id = str(hit.get("parent_id") or hit.get("chunk_id") or "")
+                if group_id in seen:
+                    continue
+                seen.add(group_id)
+                deduplicated.append(hit)
+                if len(deduplicated) >= request.top_k:
+                    break
+            hits = deduplicated
+        hits = hits[: request.top_k]
+        if request.expand_parent:
+            hits = [self._expand_parent_hit(hit, effective_request) for hit in hits]
+        if request.context_budget_chars is not None:
+            budgeted: list[dict[str, Any]] = []
+            remaining = request.context_budget_chars
+            for hit in hits:
+                context = str(hit.get("context_text") or hit.get("text") or "")
+                if remaining <= 0:
+                    break
+                if len(context) > remaining:
+                    if budgeted and remaining < 200:
+                        break
+                    context = context[:remaining]
+                    hit = {**hit, "context_text": context, "context_truncated": True}
+                else:
+                    hit = {**hit, "context_text": context, "context_truncated": False}
+                budgeted.append(hit)
+                remaining -= len(context)
+            hits = budgeted
         return {
             "query": request.query,
             "top_k": request.top_k,
             "index_version": request.index_version,
             "retrieval_mode": request.retrieval_mode,
+            "routing": routing,
+            "expand_parent": request.expand_parent,
+            "selection_policy": {
+                "kind": "top_k",
+                "requested_top_k": request.top_k,
+                "returned_count": len(hits),
+                "deduplicate_parents": request.deduplicate_parents,
+                "context_budget_chars": request.context_budget_chars,
+            },
             "lexical_algorithm": "bm25_plus" if request.retrieval_mode in {"bm25", "hybrid"} else None,
             "embedding_profile": self.embedding_profile.model_dump(mode="json"),
             "embedding_profile_fingerprint": self.embedding_profile.fingerprint(),
             "embedding_model": self.embedding_profile.model_id,
-            "hits": hits[: request.top_k],
+            "hits": hits,
             "latency_ms": round((time.perf_counter() - started) * 1000.0, 3),
             "note": (
                 "Offline deterministic hashing vector baseline; no external embedding model call."

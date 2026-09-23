@@ -77,6 +77,8 @@ class ToolResult(BaseModel):
     error: str = ""
     llm_calls: int = 0
     simulated_model_calls: int = 0
+    error_detail: dict[str, Any] = Field(default_factory=dict)
+    audit: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolDefinition(BaseModel):
@@ -86,6 +88,10 @@ class ToolDefinition(BaseModel):
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     requires_live_llm: bool = False
+    execution_backend: Literal["in_process", "subprocess", "docker"] = "in_process"
+    required_grants: list[str] = Field(default_factory=list)
+    retry_safe: bool = False
+    max_transient_retries: int = 0
 
 
 class GenerateDemoDataArgs(BaseModel):
@@ -165,6 +171,7 @@ class IngestKnowledgeArgs(BaseModel):
     index_version: str = "yieldmind-chroma-hashing-v1"
     chunk_size: int = Field(default=1200, ge=200, le=4000)
     chunk_overlap: int = Field(default=180, ge=0, le=1000)
+    split_strategy: Literal["recursive_chars_v3", "section_aware_v4"] = "recursive_chars_v3"
     source_metadata: dict[str, KnowledgeSourceMetadata] = Field(default_factory=dict)
 
 
@@ -175,6 +182,11 @@ class SearchKnowledgeArgs(BaseModel):
     document_id: str | None = None
     corpus: Literal["project", "literature"] | None = None
     retrieval_mode: Literal["vector", "bm25", "hybrid"] = "hybrid"
+    routing_mode: Literal["none", "auto"] = "none"
+    expand_parent: bool = False
+    parent_context_max_chars: int = Field(default=4000, ge=200, le=20000)
+    deduplicate_parents: bool = False
+    context_budget_chars: int | None = Field(default=None, ge=500, le=50000)
 
 
 class ExistingPipelineArgs(BaseModel):
@@ -197,6 +209,11 @@ class ToolSpec:
     handler: Callable[[BaseModel], ToolResult]
     risk_level: str = "low"
     requires_live_llm: bool = False
+    execution_backend: Literal["in_process", "subprocess", "docker"] = "in_process"
+    required_grants: tuple[str, ...] = ()
+    retry_safe: bool = False
+    max_transient_retries: int = 0
+    retry_backoff_seconds: float = 0.1
 
 
 class ToolRegistry:
@@ -234,6 +251,7 @@ class ToolRegistry:
                 description="Create deterministic yield-stress demo data using the existing domain synthetic-data generator.",
                 args_model=GenerateDemoDataArgs,
                 handler=self._generate_demo_data,
+                risk_level="medium",
             )
         )
         self._register(
@@ -250,6 +268,7 @@ class ToolRegistry:
                 description="Run the existing deterministic fixed-baseline evaluator and persist the measured report.",
                 args_model=RunFixedBaselineArgs,
                 handler=self._run_fixed_baseline_eval,
+                risk_level="medium",
             )
         )
         self._register(
@@ -258,6 +277,7 @@ class ToolRegistry:
                 description="Run the existing CandidateAgent proxy benchmark on concrete model/mechanism strategies.",
                 args_model=RunCandidateBenchmarkArgs,
                 handler=self._run_candidate_benchmark,
+                risk_level="medium",
             )
         )
         self._register(
@@ -274,6 +294,7 @@ class ToolRegistry:
                 description="Build a compact JSON and Markdown report from real workflow artifact paths.",
                 args_model=BuildRunReportArgs,
                 handler=self._build_run_report,
+                risk_level="medium",
             )
         )
         self._register(
@@ -282,7 +303,9 @@ class ToolRegistry:
                 description="Run a Python subprocess with no shell, bounded timeout, repository-contained cwd, and minimal env.",
                 args_model=SandboxPythonArgs,
                 handler=self._run_sandboxed_python,
-                risk_level="medium",
+                risk_level="high",
+                execution_backend="subprocess",
+                required_grants=("subprocess_execute",),
             )
         )
         self._register(
@@ -296,6 +319,8 @@ class ToolRegistry:
                 args_model=DockerSandboxPythonArgs,
                 handler=self._run_docker_sandboxed_python,
                 risk_level="high",
+                execution_backend="docker",
+                required_grants=("docker_execute",),
             )
         )
         self._register(
@@ -313,6 +338,7 @@ class ToolRegistry:
                 args_model=IngestKnowledgeArgs,
                 handler=self._ingest_knowledge_documents,
                 risk_level="medium",
+                required_grants=("knowledge_write",),
             )
         )
         self._register(
@@ -321,6 +347,8 @@ class ToolRegistry:
                 description="Search the domain knowledge base and return chunk IDs, sources, text, scores, and index version for evidence-grounded planning.",
                 args_model=SearchKnowledgeArgs,
                 handler=self._search_knowledge,
+                retry_safe=True,
+                max_transient_retries=2,
             )
         )
         self._register(
@@ -358,6 +386,8 @@ class ToolRegistry:
                 handler=self._run_existing_pipeline,
                 risk_level="high",
                 requires_live_llm=True,
+                execution_backend="subprocess",
+                required_grants=("live_llm", "subprocess_execute"),
             )
         )
 
@@ -370,6 +400,10 @@ class ToolRegistry:
                 input_schema=_schema(spec.args_model),
                 output_schema=_schema(ToolResult),
                 requires_live_llm=spec.requires_live_llm,
+                execution_backend=spec.execution_backend,
+                required_grants=list(spec.required_grants),
+                retry_safe=spec.retry_safe,
+                max_transient_retries=spec.max_transient_retries,
             )
             for spec in self._tools.values()
         ]
@@ -379,6 +413,14 @@ class ToolRegistry:
         if name not in self._tools:
             raise KeyError(f"Unknown tool: {name}")
         return self._tools[name].args_model.model_validate(args or {})
+
+    def get_spec(self, name: str) -> ToolSpec:
+        if name not in self._tools:
+            raise KeyError(f"Unknown tool: {name}")
+        return self._tools[name]
+
+    def names(self) -> list[str]:
+        return sorted(self._tools)
 
     def execute(
         self,
@@ -390,67 +432,22 @@ class ToolRegistry:
         turn_id: str | None = None,
         idempotency_key: str = "",
     ) -> ToolResult:
-        parsed = self.validate_call(name, args)
-        spec = self._tools[name]
-        started = time.time()
-        payload_args = redact_payload(RedactRequest(payload=parsed.model_dump())).payload
-        claimed_call: dict[str, Any] | None = None
-        if self.store is not None and idempotency_key:
-            claimed_call, existed = self.store.claim_tool_call(
-                tool_name=name,
-                mode=OFFLINE_MODE,
-                args=payload_args,
-                idempotency_key=idempotency_key,
-                run_id=run_id,
-                session_id=session_id,
-                turn_id=turn_id,
-                started_at=started,
-            )
-            if existed:
-                previous_result = claimed_call.get("result") or {}
-                if claimed_call.get("status") in {"passed", "failed"} and previous_result:
-                    return ToolResult.model_validate(previous_result)
-                return ToolResult(
-                    ok=False,
-                    mode=str(claimed_call.get("mode") or OFFLINE_MODE),
-                    error=(
-                        "An earlier execution with this idempotency key is still running or has an "
-                        "ambiguous outcome; refusing automatic replay."
-                    ),
-                )
-        try:
-            result = spec.handler(parsed)
-        except Exception as exc:
-            result = ToolResult(ok=False, mode=OFFLINE_MODE, error=f"{type(exc).__name__}: {exc}")
+        # Compatibility facade for older callers. New application paths create a
+        # ToolExecutor with an explicit, trusted ExecutionContext instead.
+        from yieldmind.tool_execution import ExecutionContext, ToolExecutor
 
-        status = "passed" if result.ok else "failed"
-        payload_result = redact_payload(RedactRequest(payload=result.model_dump())).payload
-        if self.store is not None:
-            completed = time.time()
-            if claimed_call is not None:
-                self.store.complete_tool_call(
-                    str(claimed_call["call_id"]),
-                    status=status,
-                    mode=result.mode,
-                    result=payload_result,
-                    error=result.error,
-                    completed_at=completed,
-                )
-            else:
-                self.store.record_tool_call(
-                    tool_name=name,
-                    mode=result.mode,
-                    status=status,
-                    args=payload_args,
-                    result=payload_result,
-                    error=result.error,
-                    run_id=run_id,
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    started_at=started,
-                    completed_at=completed,
-                )
-        return result
+        return ToolExecutor(self, store=self.store).execute(
+            name,
+            args,
+            context=ExecutionContext(
+                caller="legacy_registry",
+                run_id=str(run_id or ""),
+                session_id=str(session_id or ""),
+                turn_id=str(turn_id or ""),
+                grants={"subprocess_execute", "docker_execute", "live_llm", "knowledge_write"},
+            ),
+            idempotency_key=idempotency_key,
+        )
 
     def _generate_demo_data(self, args: BaseModel) -> ToolResult:
         parsed = args if isinstance(args, GenerateDemoDataArgs) else GenerateDemoDataArgs.model_validate(args)
@@ -507,6 +504,7 @@ class ToolRegistry:
                 index_version=parsed.index_version,
                 chunk_size=parsed.chunk_size,
                 chunk_overlap=parsed.chunk_overlap,
+                split_strategy=parsed.split_strategy,
                 source_metadata=parsed.source_metadata,
             )
         )
@@ -528,6 +526,11 @@ class ToolRegistry:
                 document_id=parsed.document_id,
                 corpus=parsed.corpus,
                 retrieval_mode=parsed.retrieval_mode,
+                routing_mode=parsed.routing_mode,
+                expand_parent=parsed.expand_parent,
+                parent_context_max_chars=parsed.parent_context_max_chars,
+                deduplicate_parents=parsed.deduplicate_parents,
+                context_budget_chars=parsed.context_budget_chars,
             )
         )
         return ToolResult(ok=True, result=_jsonable(result))
@@ -779,9 +782,12 @@ class ToolRegistry:
             for name, path in parsed.artifact_paths.items()
         }
         selected_strategy = None
+        final_selection: dict[str, Any] = {}
         benchmark_json = artifact_summaries.get("candidate_benchmark_report", {}).get("json", {})
         if isinstance(benchmark_json, dict):
             selected_strategy = benchmark_json.get("selected_strategy_id")
+            if isinstance(benchmark_json.get("final_selection"), dict):
+                final_selection = benchmark_json["final_selection"]
         evidence_refs = [ref.model_dump(mode="json") for ref in parsed.evidence_refs]
         report = {
             "title": parsed.title,
@@ -790,6 +796,7 @@ class ToolRegistry:
             "artifact_paths": parsed.artifact_paths,
             "evidence_refs": evidence_refs,
             "selected_strategy_id": selected_strategy,
+            "final_model_selection": final_selection,
             "notes": parsed.notes,
             "artifact_summaries": artifact_summaries,
             "mode_note": "Report generated from real artifact files; no model call.",
@@ -802,6 +809,8 @@ class ToolRegistry:
             "",
             f"- run_id: `{parsed.run_id or 'n/a'}`",
             f"- selected_strategy_id: `{selected_strategy or 'n/a'}`",
+            f"- final_winner_type: `{final_selection.get('winner_type') or 'n/a'}`",
+            f"- final_winner_id: `{final_selection.get('winner_id') or 'n/a'}`",
             "- model calls: `0`",
             "",
             "## Artifacts",

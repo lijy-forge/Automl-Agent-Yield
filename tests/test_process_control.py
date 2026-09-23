@@ -15,6 +15,10 @@ def _return_value(value: str) -> dict[str, str]:
     return {"value": value}
 
 
+def _return_large_value(size: int) -> dict[str, str]:
+    return {"blob": "x" * size}
+
+
 def _spawn_sleeping_descendant(pid_path: str, sleep_seconds: float) -> None:
     child = subprocess.Popen(
         [sys.executable, "-c", f"import time; time.sleep({sleep_seconds!r})"],
@@ -58,6 +62,21 @@ def test_managed_process_returns_serializable_value() -> None:
     assert outcome.status == "completed"
     assert outcome.value == {"value": "ok"}
     assert outcome.exitcode == 0
+
+
+def test_managed_process_drains_large_result_without_queue_deadlock() -> None:
+    size = 8 * 1024 * 1024
+
+    outcome = run_managed_process(
+        _return_large_value,
+        (size,),
+        timeout_seconds=5,
+        poll_interval_seconds=0.02,
+    )
+
+    assert outcome.ok
+    assert len(outcome.value["blob"]) == size
+    assert outcome.terminate_sent is False
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process-group descendant cleanup requires POSIX")

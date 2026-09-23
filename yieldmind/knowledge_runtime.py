@@ -11,6 +11,7 @@ from yieldmind.database import YieldMindStore
 from yieldmind.knowledge_base import (
     DEFAULT_CHROMA_DIR,
     DEFAULT_COLLECTION,
+    HashingEmbeddingFunction,
     HttpEmbeddingFunction,
     KnowledgeBase,
     qwen3_embedding_profile,
@@ -84,6 +85,24 @@ def configured_knowledge_base(
         collection_name=runtime.collection_name,
         embedding=embedding,
         embedding_profile=profile,
+    )
+
+
+def configured_embedding(
+    *,
+    config: KnowledgeRuntimeConfig | None = None,
+) -> HashingEmbeddingFunction | HttpEmbeddingFunction:
+    """Build only the configured embedding client, without opening a Chroma collection."""
+    runtime = config or KnowledgeRuntimeConfig.from_env()
+    if runtime.profile == "local_hashing":
+        return HashingEmbeddingFunction()
+    profile = qwen3_embedding_profile(http=True)
+    return HttpEmbeddingFunction(
+        profile,
+        endpoint=runtime.embedding_endpoint,
+        token=os.environ.get(runtime.embedding_token_env, ""),
+        timeout_seconds=runtime.embedding_timeout_seconds,
+        batch_size=runtime.embedding_batch_size,
     )
 
 

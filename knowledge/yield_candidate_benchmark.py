@@ -551,6 +551,16 @@ def _evaluate_proxy(
         "primary_evaluation": "5-fold OOF" if n_splits == 5 else f"{n_splits}-fold OOF",
         "oof_metrics": oof,
         "fold_metrics": fold_rows,
+        "_oof_prediction_preview": [
+            {
+                "sample_index": int(index),
+                "sample_id": str(df.iloc[index].get("sample_id", index)),
+                "y_true": float(y[index]),
+                "y_pred": float(oof_pred[index]),
+                "residual": float(y[index] - oof_pred[index]),
+            }
+            for index in np.linspace(0, len(df) - 1, num=min(len(df), 200), dtype=int)
+        ],
     }
 
     if anchor_df is not None and len(anchor_df) > 0:
@@ -567,7 +577,15 @@ def _evaluate_proxy(
     return result
 
 
-def _evaluate_baseline_summary(df: pd.DataFrame, feature_columns: list[str], n_splits: int, random_state: int) -> dict[str, Any]:
+def _evaluate_baseline_summary(
+    df: pd.DataFrame,
+    feature_columns: list[str],
+    n_splits: int,
+    random_state: int,
+    *,
+    groups: Any | None = None,
+    group_column: str | None = None,
+) -> dict[str, Any]:
     try:
         bundle = run_fixed_yield_baselines(
             df,
@@ -576,14 +594,20 @@ def _evaluate_baseline_summary(df: pd.DataFrame, feature_columns: list[str], n_s
             n_repeats=1,
             random_state=random_state,
             enable_sp_monotonic="sp_percent" in feature_columns,
+            groups=groups,
+            group_column=group_column,
         )
         rows = list(bundle.get("baseline_results") or [])
         best = min(rows, key=lambda row: float(row.get("oof_rmse", row.get("mean_rmse", float("inf"))))) if rows else None
         return {
             "status": "evaluated",
             "baseline_protocol": bundle.get("baseline_protocol"),
+            "split_strategy": bundle.get("split_strategy"),
+            "group_column": bundle.get("group_column"),
+            "n_unique_groups": bundle.get("n_unique_groups"),
             "best_baseline": best,
             "baseline_results": rows,
+            "best_baseline_prediction_preview": bundle.get("best_baseline_prediction_preview", []),
         }
     except Exception as exc:
         return {
@@ -591,6 +615,104 @@ def _evaluate_baseline_summary(df: pd.DataFrame, feature_columns: list[str], n_s
             "error": f"{type(exc).__name__}: {exc}",
             "baseline_results": [],
         }
+
+
+def _select_final_model(
+    selected_candidate: dict[str, Any] | None,
+    baseline_summary: dict[str, Any],
+    *,
+    candidate_prediction_preview: list[dict[str, Any]],
+) -> dict[str, Any]:
+    best_baseline = baseline_summary.get("best_baseline") if isinstance(baseline_summary, dict) else None
+    best_baseline = best_baseline if isinstance(best_baseline, dict) else None
+    candidate_metrics = (
+        selected_candidate.get("oof_metrics")
+        if isinstance(selected_candidate, dict) and isinstance(selected_candidate.get("oof_metrics"), dict)
+        else None
+    )
+    candidate_rmse = _safe_float((candidate_metrics or {}).get("rmse"))
+    baseline_rmse = _safe_float(
+        (best_baseline or {}).get("oof_rmse", (best_baseline or {}).get("mean_rmse"))
+    )
+    candidate_protocol = (
+        str(selected_candidate.get("primary_evaluation") or "")
+        if isinstance(selected_candidate, dict)
+        else ""
+    )
+    baseline_protocol = str(baseline_summary.get("baseline_protocol") or "")
+    protocols_match = bool(candidate_protocol and candidate_protocol == baseline_protocol)
+    comparable = bool(candidate_rmse is not None and baseline_rmse is not None and protocols_match)
+
+    normalized_baseline_metrics = (
+        {
+            "rmse": best_baseline.get("oof_rmse"),
+            "mae": best_baseline.get("oof_mae"),
+            "r2": best_baseline.get("oof_r2"),
+            "mape": best_baseline.get("oof_mape"),
+        }
+        if best_baseline
+        else None
+    )
+    rmse_delta = (
+        float(candidate_rmse - baseline_rmse)
+        if candidate_rmse is not None and baseline_rmse is not None
+        else None
+    )
+    if not comparable:
+        winner_type = "none"
+        winner_id = None
+        winner_name = None
+        winner_metrics = None
+        winner_preview: list[dict[str, Any]] = []
+        status = "not_comparable"
+        reason = "Candidate and fixed baseline do not have comparable OOF RMSE under the same protocol."
+    elif candidate_rmse < baseline_rmse:
+        winner_type = "candidate_strategy"
+        winner_id = selected_candidate.get("strategy_id")
+        winner_name = selected_candidate.get("strategy_name") or winner_id
+        winner_metrics = candidate_metrics
+        winner_preview = candidate_prediction_preview
+        status = "candidate_selected_lower_oof_rmse"
+        reason = "The audited candidate has lower OOF RMSE than the best fixed baseline under the same folds."
+    else:
+        winner_type = "fixed_baseline"
+        winner_id = best_baseline.get("name")
+        winner_name = best_baseline.get("name")
+        winner_metrics = normalized_baseline_metrics
+        winner_preview = list(baseline_summary.get("best_baseline_prediction_preview") or [])
+        status = (
+            "fixed_baseline_selected_tie"
+            if candidate_rmse == baseline_rmse
+            else "fixed_baseline_selected_lower_oof_rmse"
+        )
+        reason = (
+            "The fixed baseline ties the audited candidate on OOF RMSE, so the simpler fixed baseline wins the tie."
+            if candidate_rmse == baseline_rmse
+            else "The best fixed baseline has lower OOF RMSE than the audited candidate under the same folds."
+        )
+
+    return {
+        "status": status,
+        "winner_type": winner_type,
+        "winner_id": winner_id,
+        "winner_name": winner_name,
+        "winner_oof_metrics": winner_metrics,
+        "winner_prediction_preview": winner_preview,
+        "candidate_strategy_id": selected_candidate.get("strategy_id") if isinstance(selected_candidate, dict) else None,
+        "candidate_oof_metrics": candidate_metrics,
+        "fixed_baseline_id": best_baseline.get("name") if best_baseline else None,
+        "fixed_baseline_oof_metrics": normalized_baseline_metrics,
+        "candidate_minus_baseline_oof_rmse": rmse_delta,
+        "candidate_beats_fixed_baseline": bool(comparable and candidate_rmse < baseline_rmse),
+        "comparison_valid": comparable,
+        "comparison_protocol": candidate_protocol if protocols_match else None,
+        "candidate_protocol": candidate_protocol,
+        "fixed_baseline_protocol": baseline_protocol,
+        "selection_metric": "oof_rmse",
+        "selection_metric_direction": "lower_is_better",
+        "tie_break_rule": "prefer_fixed_baseline",
+        "reason": reason,
+    }
 
 
 def _anchor_generalization_summary(row: dict[str, Any]) -> dict[str, Any]:
@@ -965,7 +1087,7 @@ def run_candidate_benchmark(
                 strategy_id,
                 classification["feature_mode"],
                 classification["proxy_model"],
-                random_state=random_state + index * 17,
+                random_state=random_state,
                 n_splits=n_splits,
                 anchor_df=anchor_df,
             )
@@ -1034,8 +1156,17 @@ def run_candidate_benchmark(
         best_baseline_rmse = _safe_float(best_baseline.get("oof_rmse", best_baseline.get("mean_rmse")))
 
     selected_oof_rmse = None
+    selected_prediction_preview: list[dict[str, Any]] = []
     if isinstance(selected, dict):
         selected_oof_rmse = _safe_float((selected.get("oof_metrics") or {}).get("rmse"))
+        selected_prediction_preview = list(selected.get("_oof_prediction_preview") or [])
+    final_selection = _select_final_model(
+        selected if isinstance(selected, dict) else None,
+        baseline_summary,
+        candidate_prediction_preview=selected_prediction_preview,
+    )
+    for row in rows:
+        row.pop("_oof_prediction_preview", None)
     viability_summary = {
         "has_anchor_validation": has_anchor_validation,
         "evaluated_strategy_count": len(evaluated_rows),
@@ -1096,12 +1227,14 @@ def run_candidate_benchmark(
         ),
         "selected_strategy_score_1_to_10": selected.get("audited_selection_score_1_to_10") if isinstance(selected, dict) else None,
         "selected_strategy_oof_rmse": selected_oof_rmse,
+        "selected_strategy_prediction_preview": selected_prediction_preview,
         "selected_strategy_anchor_validation": selected.get("anchor_validation") if isinstance(selected, dict) else None,
         "selected_strategy_generalization_gap": selected.get("generalization_gap") if isinstance(selected, dict) else None,
         "selected_strategy_anchor_generalization_status": selected.get("anchor_generalization_status") if isinstance(selected, dict) else None,
         "best_fixed_baseline_oof_rmse": best_baseline_rmse,
+        "final_selection": final_selection,
         "selected_beats_fixed_baseline_proxy": (
-            bool(selected_oof_rmse is not None and best_baseline_rmse is not None and selected_oof_rmse <= best_baseline_rmse)
+            bool(selected_oof_rmse is not None and best_baseline_rmse is not None and selected_oof_rmse < best_baseline_rmse)
             if selected_oof_rmse is not None and best_baseline_rmse is not None
             else None
         ),
@@ -1129,6 +1262,11 @@ def apply_benchmark_selection(
     if isinstance(updated.get("selected_combination"), dict):
         selected_before = updated["selected_combination"].get("strategy_id")
     benchmark_selected = benchmark_report.get("selected_strategy_id")
+    final_selection = (
+        benchmark_report.get("final_selection")
+        if isinstance(benchmark_report.get("final_selection"), dict)
+        else {}
+    )
     no_viable_anchor_candidate = bool(
         (benchmark_report.get("anchor_viability_summary") or {}).get("no_viable_anchor_candidate")
         or benchmark_report.get("status") == "no_viable_anchor_candidate"
@@ -1190,6 +1328,10 @@ def apply_benchmark_selection(
                 "error": bench.get("error"),
             }
         strategy["selected"] = bool(selected_after and sid and sid == str(selected_after))
+        strategy["final_selected"] = bool(
+            final_selection.get("winner_type") == "candidate_strategy"
+            and sid == str(final_selection.get("winner_id"))
+        )
 
     selected_strategy = next(
         (
@@ -1325,6 +1467,7 @@ def apply_benchmark_selection(
         )
 
     strategy_summaries = [row_summary(row) for row in rows]
+    updated["final_model_selection"] = deepcopy(final_selection)
 
     audit = {
         "stage": "candidate_selection_audit",
@@ -1341,11 +1484,13 @@ def apply_benchmark_selection(
             "data capability audit",
             "same-protocol lightweight OOF proxy benchmark",
             "real-anchor viability gate when anchor data exists",
-            "fixed baseline comparison as a reference only",
+            "global candidate-versus-fixed-baseline selection by OOF RMSE",
+            "fixed baseline wins exact ties",
         ],
         "strategy_benchmark_summaries": strategy_summaries,
         "rejected_strategies": rejected,
         "selected_strategy_benchmark": selected_row,
+        "final_model_selection": final_selection,
         "benchmark_alignment_requirement": {
             "selected_strategy_id": selected_after,
             "selected_proxy_model": selected_row.get("proxy_model") if isinstance(selected_row, dict) else None,
@@ -1375,6 +1520,7 @@ def apply_benchmark_selection(
             "selected_strategy_anchor_generalization_status": benchmark_report.get("selected_strategy_anchor_generalization_status"),
             "best_fixed_baseline_oof_rmse": benchmark_report.get("best_fixed_baseline_oof_rmse"),
             "selected_beats_fixed_baseline_proxy": benchmark_report.get("selected_beats_fixed_baseline_proxy"),
+            "final_selection": final_selection,
             "sample_info": benchmark_report.get("sample_info"),
         },
         "note": (

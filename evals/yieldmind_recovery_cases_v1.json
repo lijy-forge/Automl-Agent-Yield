@@ -1,0 +1,47 @@
+{
+  "version": "yieldmind-controlled-recovery-v1",
+  "label_scope": "Paired controlled-failure workflow recovery cases; not production LLM task success.",
+  "limitations": [
+    "The benchmark measures deterministic LangGraph recovery control flow with real local tools and declared fault injection.",
+    "It does not measure live-LLM code-generation quality or production traffic success.",
+    "Baseline and recovery arms use the same case, seed, tools, and completion predicate; only recovery budgets differ."
+  ],
+  "cases": [
+    {"id":"clean_01","category":"clean_control","random_state":101,"fault_tool":"","fail_times":0,"expected_route":"none"},
+    {"id":"clean_02","category":"clean_control","random_state":102,"fault_tool":"","fail_times":0,"expected_route":"none"},
+    {"id":"clean_03","category":"clean_control","random_state":103,"fault_tool":"","fail_times":0,"expected_route":"none"},
+    {"id":"clean_04","category":"clean_control","random_state":104,"fault_tool":"","fail_times":0,"expected_route":"none"},
+    {"id":"clean_05","category":"clean_control","random_state":105,"fault_tool":"","fail_times":0,"expected_route":"none"},
+
+    {"id":"repair_eval_01","category":"evaluation_transient","random_state":201,"fault_tool":"run_fixed_baseline_eval","expected_route":"local_repair","error_message":"Injected transient baseline evaluation failure."},
+    {"id":"repair_eval_02","category":"evaluation_transient","random_state":202,"fault_tool":"run_fixed_baseline_eval","expected_route":"local_repair","error_message":"Injected transient baseline evaluation failure."},
+    {"id":"repair_eval_03","category":"evaluation_transient","random_state":203,"fault_tool":"run_fixed_baseline_eval","expected_route":"local_repair","error_message":"Injected transient baseline evaluation failure."},
+    {"id":"repair_eval_04","category":"evaluation_transient","random_state":204,"fault_tool":"run_fixed_baseline_eval","expected_route":"local_repair","error_message":"Injected transient baseline evaluation failure."},
+
+    {"id":"repair_candidate_01","category":"candidate_transient","random_state":301,"fault_tool":"run_candidate_benchmark","expected_route":"local_repair","error_message":"Injected transient candidate benchmark failure."},
+    {"id":"repair_candidate_02","category":"candidate_transient","random_state":302,"fault_tool":"run_candidate_benchmark","expected_route":"local_repair","error_message":"Injected transient candidate benchmark failure."},
+    {"id":"repair_candidate_03","category":"candidate_transient","random_state":303,"fault_tool":"run_candidate_benchmark","expected_route":"local_repair","error_message":"Injected transient candidate benchmark failure."},
+    {"id":"repair_candidate_04","category":"candidate_transient","random_state":304,"fault_tool":"run_candidate_benchmark","expected_route":"local_repair","error_message":"Injected transient candidate benchmark failure."},
+
+    {"id":"repair_artifact_01","category":"artifact_transient","random_state":401,"fault_tool":"verify_artifacts","expected_route":"local_repair","error_message":"Injected transient artifact verification failure."},
+    {"id":"repair_artifact_02","category":"artifact_transient","random_state":402,"fault_tool":"verify_artifacts","expected_route":"local_repair","error_message":"Injected transient artifact verification failure."},
+    {"id":"repair_artifact_03","category":"artifact_transient","random_state":403,"fault_tool":"verify_artifacts","expected_route":"local_repair","error_message":"Injected transient artifact verification failure."},
+    {"id":"repair_artifact_04","category":"artifact_transient","random_state":404,"fault_tool":"verify_artifacts","expected_route":"local_repair","error_message":"Injected transient artifact verification failure."},
+
+    {"id":"repair_report_01","category":"report_transient","random_state":501,"fault_tool":"build_run_report","expected_route":"local_repair","error_message":"Injected transient report generation failure."},
+    {"id":"repair_report_02","category":"report_transient","random_state":502,"fault_tool":"build_run_report","expected_route":"local_repair","error_message":"Injected transient report generation failure."},
+    {"id":"repair_report_03","category":"report_transient","random_state":503,"fault_tool":"build_run_report","expected_route":"local_repair","error_message":"Injected transient report generation failure."},
+    {"id":"repair_report_04","category":"report_transient","random_state":504,"fault_tool":"build_run_report","expected_route":"local_repair","error_message":"Injected transient report generation failure."},
+
+    {"id":"replan_generate_01","category":"data_generation_transient","random_state":601,"fault_tool":"generate_demo_yield_data","expected_route":"replan","error_message":"Injected transient data generation failure."},
+    {"id":"replan_generate_02","category":"data_generation_transient","random_state":602,"fault_tool":"generate_demo_yield_data","expected_route":"replan","error_message":"Injected transient data generation failure."},
+    {"id":"replan_profile_01","category":"data_profile_transient","random_state":603,"fault_tool":"profile_yield_data","expected_route":"replan","error_message":"Injected transient data profile failure."},
+    {"id":"replan_profile_02","category":"data_profile_transient","random_state":604,"fault_tool":"profile_yield_data","expected_route":"replan","error_message":"Injected transient data profile failure."},
+
+    {"id":"fatal_evidence_01","category":"fatal_negative_control","random_state":701,"fault_tool":"search_knowledge","expected_route":"fatal","error_message":"Injected unavailable mandatory evidence."},
+    {"id":"fatal_evidence_02","category":"fatal_negative_control","random_state":702,"fault_tool":"search_knowledge","expected_route":"fatal","error_message":"Injected unavailable mandatory evidence."},
+    {"id":"fatal_evidence_03","category":"fatal_negative_control","random_state":703,"fault_tool":"search_knowledge","expected_route":"fatal","error_message":"Injected unavailable mandatory evidence."},
+    {"id":"fatal_evidence_04","category":"fatal_negative_control","random_state":704,"fault_tool":"search_knowledge","expected_route":"fatal","error_message":"Injected unavailable mandatory evidence."},
+    {"id":"fatal_evidence_05","category":"fatal_negative_control","random_state":705,"fault_tool":"search_knowledge","expected_route":"fatal","error_message":"Injected unavailable mandatory evidence."}
+  ]
+}

@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import yieldmind.api as yieldmind_api
+from knowledge.yield_candidate_benchmark import _select_final_model
 from yieldmind.checkpointing import psycopg_connection_string
 from yieldmind.database import YieldMindStore, connect
 from yieldmind.function_calling import (
@@ -28,6 +29,8 @@ from yieldmind.knowledge_base import (
     KnowledgeBase,
     KnowledgeIngestRequest,
     KnowledgeSearchRequest,
+    KnowledgeSourceMetadata,
+    split_knowledge_section,
 )
 from yieldmind.knowledge_runtime import (
     KnowledgeRuntimeConfig,
@@ -474,16 +477,49 @@ def test_task_status_keeps_postgres_authority_when_celery_backend_fails(
 
 
 def test_static_console_exposes_real_task_cancel_controls() -> None:
-    html = (Path(__file__).resolve().parents[1] / "yieldmind" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "/api/tasks/workflows/offline" in html
-    assert "/cancel`" in html
-    assert "/api/task-recovery/stale" in html
-    assert "/recover`" in html
-    assert "confirmed_worker_stopped:true" in html
-    assert "cancel_requested_by" in html
-    assert "依赖检查" in html
-    assert 'celery_state:"REVOKED"' not in html
-    assert "REVOKE_REQUESTED" in html
+    static_dir = Path(__file__).resolve().parents[1] / "yieldmind" / "static"
+    html = (static_dir / "index.html").read_text(encoding="utf-8")
+    javascript = (static_dir / "app.js").read_text(encoding="utf-8")
+    source = html + javascript
+    assert "/api/tasks/workflows/offline" in source
+    assert "/cancel`" in source
+    assert "/api/task-recovery/stale" in source
+    assert "/recover`" in source
+    assert "confirmed_worker_stopped: true" in source
+    assert "cancel_requested_by" not in source
+    assert "任务队列与恢复" in html
+    assert 'celery_state: "REVOKED"' not in source
+    assert "REVOKE_REQUESTED" in source
+    assert "selected_strategy_prediction_preview" in javascript
+    assert "finalSelection" in javascript
+    assert "winner_prediction_preview" in javascript
+    assert "/api/workflows/domain/stream" in javascript
+    assert "/api/workflows/offline" in javascript
+    assert "/api/data/default" in javascript
+    assert 'id="csv-upload"' in html
+    assert 'id="agent-grid"' in html
+    assert "Agent Manager" in javascript
+    assert "OperationAgent" in javascript
+    assert "handleManagerDecision" in javascript
+    assert 'id="allow-live-llm"' in html
+    assert 'id="domain-knowledge-search"' in html
+    assert "use_knowledge_search" in javascript
+    assert '离线基线评测（非 Agent）' in html
+    assert 'id="agent-behavior-list"' in html
+    assert 'id="agent-autoscroll"' in html
+    assert "renderAgentBehaviors" in javascript
+    assert "完整路由决策" in javascript
+    assert 'id="domain-overview"' in html
+    assert 'id="behavior-agent-filter"' in html
+    assert 'id="behavior-type-filter"' in html
+    assert 'id="behavior-status-filter"' in html
+    assert 'id="export-agent-audit"' in html
+    assert "configureResultMode" in javascript
+    assert "renderDomainOverview" in javascript
+    assert "yieldmind-agent-audit-v1" in javascript
+    client = TestClient(yieldmind_api.app)
+    assert client.get("/static/app.css").status_code == 200
+    assert client.get("/static/app.js").status_code == 200
 
 
 def test_profile_and_baseline_tools(tmp_path: Path) -> None:
@@ -498,9 +534,86 @@ def test_profile_and_baseline_tools(tmp_path: Path) -> None:
     assert baseline.ok, baseline.error
     assert Path(baseline.artifacts["baseline_report"]).exists()
     assert baseline.result["best_baseline"]["name"] == baseline.result["report"]["best_baseline"]
+    assert len(baseline.result["report"]["best_baseline_prediction_preview"]) == 6
     candidate = registry.execute("run_candidate_benchmark", {"data_path": str(csv_path), "n_splits": 3, "max_rows": 20})
     assert candidate.ok, candidate.error
     assert Path(candidate.artifacts["candidate_benchmark_report"]).exists()
+    preview = candidate.result["benchmark_report"]["selected_strategy_prediction_preview"]
+    assert len(preview) == 6
+    assert {"sample_index", "sample_id", "y_true", "y_pred", "residual"} <= set(preview[0])
+    assert all("_oof_prediction_preview" not in row for row in candidate.result["benchmark_report"]["strategy_benchmarks"])
+    final_selection = candidate.result["benchmark_report"]["final_selection"]
+    assert final_selection["comparison_valid"] is True
+    assert final_selection["winner_type"] in {"fixed_baseline", "candidate_strategy"}
+    assert len(final_selection["winner_prediction_preview"]) == 6
+
+
+def test_final_model_selection_allows_fixed_baseline_or_candidate_to_win() -> None:
+    baseline = {
+        "baseline_protocol": "3-fold OOF",
+        "best_baseline": {
+            "name": "baseline_ridge_linear",
+            "oof_rmse": 1.0,
+            "oof_mae": 0.8,
+            "oof_r2": 0.9,
+            "oof_mape": 4.0,
+        },
+        "best_baseline_prediction_preview": [{"sample_id": "baseline"}],
+    }
+    candidate = {
+        "strategy_id": "candidate_hgb",
+        "strategy_name": "Candidate HGB",
+        "primary_evaluation": "3-fold OOF",
+        "oof_metrics": {"rmse": 1.2, "mae": 0.9, "r2": 0.8, "mape": 5.0},
+    }
+
+    fixed_wins = _select_final_model(
+        candidate,
+        baseline,
+        candidate_prediction_preview=[{"sample_id": "candidate"}],
+    )
+    assert fixed_wins["winner_type"] == "fixed_baseline"
+    assert fixed_wins["winner_id"] == "baseline_ridge_linear"
+    assert fixed_wins["candidate_minus_baseline_oof_rmse"] == pytest.approx(0.2)
+    assert fixed_wins["winner_prediction_preview"] == [{"sample_id": "baseline"}]
+
+    candidate["oof_metrics"]["rmse"] = 1.0
+    tied = _select_final_model(
+        candidate,
+        baseline,
+        candidate_prediction_preview=[{"sample_id": "candidate"}],
+    )
+    assert tied["winner_type"] == "fixed_baseline"
+    assert tied["status"] == "fixed_baseline_selected_tie"
+
+    candidate["oof_metrics"]["rmse"] = 0.7
+    candidate_wins = _select_final_model(
+        candidate,
+        baseline,
+        candidate_prediction_preview=[{"sample_id": "candidate"}],
+    )
+    assert candidate_wins["winner_type"] == "candidate_strategy"
+    assert candidate_wins["winner_id"] == "candidate_hgb"
+    assert candidate_wins["candidate_beats_fixed_baseline"] is True
+    assert candidate_wins["winner_prediction_preview"] == [{"sample_id": "candidate"}]
+
+
+def test_final_model_selection_refuses_mismatched_protocols() -> None:
+    selection = _select_final_model(
+        {
+            "strategy_id": "candidate_hgb",
+            "primary_evaluation": "5-fold OOF",
+            "oof_metrics": {"rmse": 0.7},
+        },
+        {
+            "baseline_protocol": "3-fold OOF",
+            "best_baseline": {"name": "baseline_ridge_linear", "oof_rmse": 1.0},
+        },
+        candidate_prediction_preview=[],
+    )
+    assert selection["winner_type"] == "none"
+    assert selection["comparison_valid"] is False
+    assert selection["status"] == "not_comparable"
 
 
 def test_tool_call_idempotency_reuses_completed_result(tmp_path: Path) -> None:
@@ -717,6 +830,48 @@ def test_function_calling_roundtrip_returns_tool_result_to_model(tmp_path: Path)
     assert tool_messages[0]["tool_call_id"] == "call_1"
     assert "sk-test-secret" not in tool_messages[0]["content"]
     assert client.chat.completions.calls[1]["tool_choice"] == "auto"
+
+
+def test_agent_loop_injects_bounded_session_context(tmp_path: Path) -> None:
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    memory = SessionMemoryStore(store)
+    session = memory.create_session(
+        CreateSessionRequest(workspace_id="context_workspace", constraints={"target_column": "tau0"})
+    )
+    turn = memory.add_message(
+        AddMessageRequest(
+            session_id=session["session_id"],
+            content="请保持目标列为 tau0，并使用较小搜索预算。",
+            idempotency_key="context-turn",
+            create_run_if_requested=False,
+        )
+    )["turn"]
+    client = _fake_client([SimpleNamespace(content="I used the bounded session context.", tool_calls=[])])
+
+    result = execute_plan(
+        ToolPlanRequest(
+            prompt="Summarize the current constraints.",
+            allow_live_llm=True,
+            session_id=session["session_id"],
+            turn_id=turn["turn_id"],
+        ),
+        registry=ToolRegistry(store=store),
+        store=store,
+        client=client,
+        simulated_test_adapter=True,
+    )
+
+    assert result.passed is True
+    assert result.context_summary["session_id"] == session["session_id"]
+    assert "current_constraints" in result.context_summary["selected_sections"]
+    initial_messages = client.chat.completions.calls[0]["messages"]
+    context_message = next(
+        message for message in initial_messages
+        if message["role"] == "system" and "Session context selected" in str(message["content"])
+    )
+    assert "tau0" in context_message["content"]
+    assert "context-turn" not in context_message["content"]
+    assert any(event["stage"] == "session_context" for event in store.list_events(result.run_id))
 
 
 def test_agent_loop_supports_multiple_tool_rounds_and_step_trace(tmp_path: Path) -> None:
@@ -1032,7 +1187,8 @@ class _NoEvidenceWorkflowRegistry(_FlakyWorkflowRegistry):
 def test_workflow_uses_conditional_local_repair(tmp_path: Path) -> None:
     store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
     registry = _FlakyWorkflowRegistry()
-    result = YieldMindWorkflow(store=store, registry=registry).run(
+    progress_events: list[dict] = []
+    result = YieldMindWorkflow(store=store, registry=registry, on_stage_progress=progress_events.append).run(
         WorkflowRequest(n_samples=20, n_splits=3, max_local_repairs=1, max_replans=0)
     )
     assert result["status"] == "passed"
@@ -1043,6 +1199,88 @@ def test_workflow_uses_conditional_local_repair(tmp_path: Path) -> None:
     persisted = store.list_stage_executions(result["run_id"])
     assert [item["stage"] for item in persisted].count("candidate_benchmark") == 2
     assert any(item["stage"] == "local_repair" for item in persisted)
+    assert progress_events[0]["agent"] == "Agent Manager"
+    assert progress_events[0]["stage"] == "start"
+    assert progress_events[0]["status"] == "running"
+    assert any(
+        event["agent"] == "CandidateAgent"
+        and event["stage"] == "candidate_benchmark"
+        and event["status"] == "running"
+        for event in progress_events
+    )
+    assert progress_events[-1]["stage"] == "finish"
+    assert progress_events[-1]["status"] == "passed"
+
+
+def test_default_dataset_upload_and_streaming_workflow_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    default_csv = tmp_path / "default.csv"
+    upload_dir = tmp_path / "uploads"
+    _write_small_yield_csv(default_csv)
+    monkeypatch.setattr(yieldmind_api, "DEFAULT_YIELD_CSV", default_csv)
+    monkeypatch.setattr(yieldmind_api, "UPLOAD_DIR", upload_dir)
+    client = TestClient(yieldmind_api.app)
+
+    default_response = client.get("/api/data/default")
+    assert default_response.status_code == 200
+    assert default_response.json()["data_path"] == str(default_csv)
+    assert default_response.json()["row_count"] == 6
+    assert default_response.json()["target_column"] == "yield_stress"
+
+    upload_response = client.post(
+        "/api/data/upload",
+        files={"file": ("operator-data.csv", default_csv.read_bytes(), "text/csv")},
+    )
+    assert upload_response.status_code == 200
+    uploaded = upload_response.json()
+    assert uploaded["data_kind"] == "user_upload"
+    assert uploaded["original_filename"] == "operator-data.csv"
+    assert uploaded["row_count"] == 6
+    assert Path(uploaded["data_path"]).is_file()
+    assert Path(uploaded["data_path"]).parent == upload_dir
+
+    rejected = client.post(
+        "/api/data/upload",
+        files={"file": ("operator-data.txt", default_csv.read_bytes(), "text/plain")},
+    )
+    assert rejected.status_code == 400
+    invalid_schema = client.post(
+        "/api/data/upload",
+        files={"file": ("wrong-schema.csv", b"feature_a,feature_b\n1,2\n", "text/csv")},
+    )
+    assert invalid_schema.status_code == 400
+    assert "schema validation failed" in invalid_schema.json()["detail"]
+    monkeypatch.setattr(yieldmind_api, "MAX_UPLOAD_BYTES", len(default_csv.read_bytes()) - 1)
+    oversized = client.post(
+        "/api/data/upload",
+        files={"file": ("too-large.csv", default_csv.read_bytes(), "text/csv")},
+    )
+    assert oversized.status_code == 413
+    assert list(upload_dir.iterdir()) == [Path(uploaded["data_path"])]
+
+    def fake_run_workflow(request, *, store=None, on_stage_progress=None, **kwargs):
+        event = {
+            "type": "agent_progress",
+            "agent": "DataAgent",
+            "stage": "profile",
+            "status": "running",
+            "message": "profiling",
+            "payload": {},
+            "run_id": "run_stream_test",
+            "ts": 1.0,
+        }
+        on_stage_progress(event)
+        return {"run_id": "run_stream_test", "status": "passed", "stages": []}
+
+    monkeypatch.setattr(yieldmind_api, "run_workflow", fake_run_workflow)
+    stream_response = client.post("/api/workflows/offline/stream", json={"n_samples": 20, "n_splits": 2})
+    assert stream_response.status_code == 200
+    lines = [json.loads(line) for line in stream_response.text.splitlines() if line]
+    assert lines[0]["type"] == "agent_progress"
+    assert lines[0]["agent"] == "DataAgent"
+    assert lines[-1]["type"] == "result"
+    assert lines[-1]["result"]["status"] == "passed"
 
 
 def test_workflow_fails_closed_when_required_evidence_is_missing(tmp_path: Path) -> None:
@@ -1097,6 +1335,10 @@ def test_knowledge_ingest_and_search(tmp_path: Path) -> None:
     result = kb.search(KnowledgeSearchRequest(query="YODEL packing phi_m yield stress", top_k=2))
     assert result["hits"]
     assert result["hits"][0]["chunk_id"].startswith("chk_")
+    oversized = kb.search(
+        KnowledgeSearchRequest(query="YODEL packing phi_m yield stress", retrieval_mode="vector", top_k=20)
+    )
+    assert len(oversized["hits"]) == 1
 
 
 def test_knowledge_bm25_hybrid_and_profile_isolation(tmp_path: Path) -> None:
@@ -1139,6 +1381,111 @@ def test_knowledge_bm25_hybrid_and_profile_isolation(tmp_path: Path) -> None:
         alternate_kb.search(KnowledgeSearchRequest(query="packing"))
     with pytest.raises(ValueError, match="immutable model revision"):
         EmbeddingProfile(provider="sentence_transformers", model_id="Qwen/Qwen3-Embedding-0.6B", revision="main")
+
+
+def test_section_aware_chunks_preserve_structural_blocks() -> None:
+    code = "```python\nresult = run_workflow()\nassert result['status'] == 'passed'\n```"
+    table = "| metric | value |\n| --- | ---: |\n| RMSE | 0.31 |"
+    text = (
+        "# Evaluation\n\n"
+        + "Ablation must use the same folds and preprocessing. " * 4
+        + "\n\n"
+        + code
+        + "\n\n"
+        + table
+        + "\n\n"
+        + "The report must preserve metrics and provenance. " * 4
+    )
+    chunks = split_knowledge_section(
+        text,
+        chunk_size=240,
+        chunk_overlap=30,
+        split_strategy="section_aware_v4",
+    )
+    assert len(chunks) >= 3
+    assert sum(code in chunk.text for chunk in chunks) == 1
+    assert sum(table in chunk.text for chunk in chunks) == 1
+    assert all(chunk.token_count > 0 for chunk in chunks)
+    assert any(chunk.role == "code" for chunk in chunks)
+    assert any(chunk.role == "table" for chunk in chunks)
+
+
+def test_structured_chunk_parent_expansion_and_auto_corpus_routing(tmp_path: Path) -> None:
+    project = tmp_path / "project.md"
+    project.write_text(
+        "# Runtime\n\n## Safety\n\n"
+        + "Docker sandbox commands use an argument vector and disable shell expansion. " * 4
+        + "\n\n"
+        + "Cancellation terminates the process group and its descendants. " * 4,
+        encoding="utf-8",
+    )
+    literature = tmp_path / "literature.md"
+    literature.write_text(
+        "# Rheology\n\n## Packing\n\n"
+        + "YODEL relates yield stress to suspension packing density phi_m and contact networks. " * 4
+        + "\n\n"
+        + "Superplasticizer dosage changes dispersion and the effective packing state. " * 4,
+        encoding="utf-8",
+    )
+    store = YieldMindStore(tmp_path / "yieldmind.sqlite3")
+    kb = KnowledgeBase(store=store, chroma_dir=tmp_path / "chroma", collection_name="structured")
+    ingest = kb.ingest(
+        KnowledgeIngestRequest(
+            paths=[str(project), str(literature)],
+            chunk_size=260,
+            chunk_overlap=40,
+            split_strategy="section_aware_v4",
+            source_metadata={
+                str(project): KnowledgeSourceMetadata(corpus="project"),
+                str(literature): KnowledgeSourceMetadata(corpus="literature"),
+            },
+        )
+    )
+    assert ingest["split_version"] == "section_aware_blocks_260_40_v4"
+    assert ingest["split_strategy"] == "section_aware_v4"
+
+    project_result = kb.search(
+        KnowledgeSearchRequest(
+            query="Docker sandbox argument vector cancellation workflow",
+            retrieval_mode="hybrid",
+            routing_mode="auto",
+            expand_parent=True,
+            parent_context_max_chars=1200,
+            deduplicate_parents=True,
+            context_budget_chars=1500,
+            top_k=3,
+        )
+    )
+    assert project_result["routing"]["resolved_corpus"] == "project"
+    assert project_result["routing"]["fallback_to_all_corpora"] is False
+    assert project_result["hits"]
+    assert all(hit["corpus"] == "project" for hit in project_result["hits"])
+    assert project_result["hits"][0]["parent_id"].startswith("par_")
+    assert project_result["hits"][0]["split_version"] == "section_aware_blocks_260_40_v4"
+    assert len(project_result["hits"][0]["context_chunk_ids"]) >= 2
+    assert "Cancellation terminates" in project_result["hits"][0]["context_text"]
+    assert project_result["selection_policy"] == {
+        "kind": "top_k",
+        "requested_top_k": 3,
+        "returned_count": len(project_result["hits"]),
+        "deduplicate_parents": True,
+        "context_budget_chars": 1500,
+    }
+    parent_ids = [hit["parent_id"] for hit in project_result["hits"]]
+    assert len(parent_ids) == len(set(parent_ids))
+    assert sum(len(hit["context_text"]) for hit in project_result["hits"]) <= 1500
+
+    literature_result = kb.search(
+        KnowledgeSearchRequest(
+            query="YODEL rheology suspension yield stress packing density phi_m",
+            retrieval_mode="hybrid",
+            routing_mode="auto",
+            top_k=3,
+        )
+    )
+    assert literature_result["routing"]["resolved_corpus"] == "literature"
+    assert literature_result["hits"]
+    assert all(hit["corpus"] == "literature" for hit in literature_result["hits"])
 
 
 def test_rrf_tie_break_does_not_depend_on_chunk_id() -> None:
@@ -1696,6 +2043,22 @@ def test_layered_memory_admission_workspace_isolation_and_summary_provenance(tmp
     sections = {item["name"]: item["text"] for item in context["sections"]}
     assert turn["turn_id"] in sections["rolling_summary"]
     assert "工作区偏好小搜索预算" in sections["workspace_memories"]
+
+
+def test_session_context_never_exceeds_declared_budget(tmp_path: Path) -> None:
+    memory = SessionMemoryStore(YieldMindStore(tmp_path / "yieldmind.sqlite3"))
+    session = memory.create_session(
+        CreateSessionRequest(constraints={"long_constraint": "x" * 4000})
+    )
+    context = memory.build_context(session["session_id"], max_tokens=200)
+
+    assert context["estimated_tokens"] <= 200
+    assert any(item["name"] == "current_constraints" for item in context["clipped_sections"])
+    constraint_section = next(
+        item for item in context["sections"] if item["name"] == "current_constraints"
+    )
+    assert constraint_section["clipped"] is True
+    assert constraint_section["included_tokens"] < constraint_section["estimated_tokens"]
 
 
 def test_session_api_returns_conflict_for_stale_constraint_version(

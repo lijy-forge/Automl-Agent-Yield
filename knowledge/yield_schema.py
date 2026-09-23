@@ -116,6 +116,11 @@ def _from_lian_table6_full(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, An
     out["phi"] = _numeric(df["phi"] if "phi" in df.columns else df["phi_percent"] / 100.0)
     out["sp_percent"] = _numeric(df["sp_percent"])
     out[TARGET_COLUMN] = _numeric(df[TARGET_COLUMN] if TARGET_COLUMN in df.columns else df["Tau0_Pa"])
+    # Preserve provenance columns for lineage/anchor audits.  They remain
+    # excluded from feature_columns and can never become model inputs.
+    for provenance_column in ("data_fidelity", "source", "is_augmented"):
+        if provenance_column in df.columns:
+            out[provenance_column] = df[provenance_column]
 
     measured_candidates = [
         "Vp_L",

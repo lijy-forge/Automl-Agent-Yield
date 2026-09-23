@@ -30,6 +30,11 @@ def main() -> int:
     )
     parser.add_argument("--literature-chunk-size", type=int, default=1800)
     parser.add_argument("--literature-chunk-overlap", type=int, default=180)
+    parser.add_argument(
+        "--split-strategy",
+        choices=("recursive_chars_v3", "section_aware_v4"),
+        default="section_aware_v4",
+    )
     args = parser.parse_args()
 
     store = YieldMindStore()
@@ -45,6 +50,7 @@ def main() -> int:
             index_version=knowledge_base.embedding_profile.index_version,
             chunk_size=700,
             chunk_overlap=80,
+            split_strategy=args.split_strategy,
         )
     )
 
@@ -55,6 +61,7 @@ def main() -> int:
         index_version=knowledge_base.embedding_profile.index_version,
         chunk_size=args.literature_chunk_size,
         chunk_overlap=args.literature_chunk_overlap,
+        split_strategy=args.split_strategy,
     )
     literature_result = knowledge_base.ingest(literature_request)
     documents = project_result["documents"] + literature_result["documents"]
@@ -95,11 +102,13 @@ def main() -> int:
             "documents": len(project_result["documents"]),
             "chunks": sum(int(document.get("chunk_count") or 0) for document in project_result["documents"]),
             "split_version": project_result["split_version"],
+            "split_strategy": project_result["split_strategy"],
         },
         "literature": {
             "documents": len(literature_result["documents"]),
             "chunks": sum(int(document.get("chunk_count") or 0) for document in literature_result["documents"]),
             "split_version": literature_result["split_version"],
+            "split_strategy": literature_result["split_strategy"],
         },
         "failed": failed,
         "verification": {

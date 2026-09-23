@@ -1,0 +1,40 @@
+{
+  "version": "yieldmind-routing-intent-v1",
+  "label_scope": "Deterministic corpus intent only; this does not label semantic relevance or retrieval quality.",
+  "cases": [
+    {"id": "project_cancel", "query": "How does YieldMind cancel a running Celery task and its child processes?", "expected_corpus": "project"},
+    {"id": "project_sandbox", "query": "Docker sandbox network isolation and argument vector execution", "expected_corpus": "project"},
+    {"id": "project_checkpoint", "query": "LangGraph workflow checkpoint recovery and bounded replanning", "expected_corpus": "project"},
+    {"id": "project_tools", "query": "Pydantic Tool Registry schema rejects unknown parameters", "expected_corpus": "project"},
+    {"id": "project_api", "query": "FastAPI endpoint authorization and secret redaction", "expected_corpus": "project"},
+    {"id": "project_leakage", "query": "target leakage denylist and train-fold preprocessing", "expected_corpus": "project"},
+    {"id": "project_embedding", "query": "embedding profile fingerprint and index version compatibility", "expected_corpus": "project"},
+    {"id": "project_queue", "query": "PostgreSQL lease Redis queue recovery audit", "expected_corpus": "project"},
+    {"id": "project_budget", "query": "tool-call token budget and repeated invocation limit", "expected_corpus": "project"},
+    {"id": "project_agent", "query": "multi-agent workflow with bounded retry and local repair", "expected_corpus": "project"},
+
+    {"id": "literature_yodel", "query": "YODEL cement suspension packing fraction and contact network", "expected_corpus": "literature"},
+    {"id": "literature_bingham", "query": "Bingham yield stress measurement for fresh concrete", "expected_corpus": "literature"},
+    {"id": "literature_hb", "query": "Herschel-Bulkley thixotropic engineering slurry", "expected_corpus": "literature"},
+    {"id": "literature_saos", "query": "SAOS BreakPro microstructure model for cement paste", "expected_corpus": "literature"},
+    {"id": "literature_vane", "query": "vane-in-cup rheometer shear rate plug flow microstructure", "expected_corpus": "literature"},
+    {"id": "literature_composition", "query": "superplasticizer maximum packing and material composition", "expected_corpus": "literature"},
+    {"id": "literature_printing", "query": "silver paste wall slip and screen-printing rheology", "expected_corpus": "literature"},
+    {"id": "literature_gels", "query": "review paper on gels and yielding liquids", "expected_corpus": "literature"},
+    {"id": "literature_fraction", "query": "cementitious suspension solid volume fraction prediction study", "expected_corpus": "literature"},
+    {"id": "literature_doi", "query": "find the DOI research paper about thixotropy measurement", "expected_corpus": "literature"},
+    {"id": "literature_boundary", "query": "redistribution of suspension particles during shear", "expected_corpus": "literature"},
+
+    {"id": "mixed_evidence", "query": "explain the quality of the available evidence", "expected_corpus": null},
+    {"id": "mixed_assumptions", "query": "compare the assumptions behind both approaches", "expected_corpus": null},
+    {"id": "mixed_validation", "query": "what should be validated before deployment", "expected_corpus": null},
+    {"id": "mixed_summary", "query": "summarize the available knowledge", "expected_corpus": null},
+    {"id": "mixed_workflow_domain", "query": "workflow evidence for yield stress", "expected_corpus": null},
+    {"id": "mixed_index_domain", "query": "compare index version rules with YODEL evidence", "expected_corpus": null},
+    {"id": "mixed_model", "query": "which model is most appropriate and why", "expected_corpus": null},
+    {"id": "mixed_next_steps", "query": "what experiments and implementation steps should come next", "expected_corpus": null},
+    {"id": "mixed_sources", "query": "compare evidence from project documents and published papers", "expected_corpus": null},
+    {"id": "mixed_generic", "query": "show the most relevant sources for this question", "expected_corpus": null},
+    {"id": "mixed_boundary", "query": "rapid optimization notes", "expected_corpus": null}
+  ]
+}

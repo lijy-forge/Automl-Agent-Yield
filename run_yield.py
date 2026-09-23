@@ -45,6 +45,7 @@ from knowledge.yield_executor_specs import (
     executor_spec_readiness,
     normalize_executor_specs,
 )
+from knowledge.yield_data_lineage import audit_anchor_compatibility, summarize_dataset_lineage
 from knowledge.yield_schema import (
     DEFAULT_LIAN_DATA_PATH,
     DEFAULT_LIAN_TEST_PATH,
@@ -55,6 +56,7 @@ from knowledge.yield_retriever import build_yield_query_plan, retrieve_yield_sou
 from operation_agent import OperationAgent
 from operation_agent.yield_guardrails import verify_yield_plugin_harness_run
 from utils import _emit_event, get_client
+from yieldmind.domain_retrieval import merge_domain_search_report
 from yieldmind.process_control import run_managed_process
 
 
@@ -259,16 +261,31 @@ def _compact_search_report_for_prompt(search_report: dict[str, Any], max_snippet
     for item in snippets[:max_snippets]:
         if not isinstance(item, dict):
             continue
+        knowledge_evidence = item.get("evidence_origin") == "knowledge_base"
         compact_snippets.append(
             {
                 "source_id": item.get("source_id") or item.get("id"),
                 "provider": item.get("provider") or item.get("source"),
                 "title": _trim_line(item.get("title"), 180),
                 "link": item.get("link") or item.get("url") or item.get("doi"),
-                "snippet": _trim_line(item.get("snippet") or item.get("summary"), 420),
+                "snippet": _trim_line(
+                    item.get("snippet") or item.get("summary"),
+                    1600 if knowledge_evidence else 420,
+                ),
                 "relevance_label": item.get("relevance_label"),
                 "relevance_score": item.get("relevance_score"),
+                "retrieval_score": item.get("retrieval_score"),
+                "retrieval_channels": item.get("retrieval_channels") or [],
                 "query": _trim_line(item.get("query"), 140),
+                "evidence_origin": item.get("evidence_origin") or "external_search",
+                "chunk_id": item.get("chunk_id"),
+                "text_hash": item.get("text_hash"),
+                "index_version": item.get("index_version"),
+                "document_id": item.get("document_id"),
+                "document_version": item.get("document_version"),
+                "source_path": item.get("source_path"),
+                "page_start": item.get("page_start"),
+                "page_end": item.get("page_end"),
             }
         )
     return {
@@ -278,6 +295,21 @@ def _compact_search_report_for_prompt(search_report: dict[str, Any], max_snippet
         "provider_summary": search_report.get("provider_summary", {}),
         "source_type_summary": search_report.get("source_type_summary", {}),
         "source_quality": search_report.get("source_quality", {}),
+        "evidence_counts": search_report.get("evidence_counts", {}),
+        "knowledge_search": {
+            key: (search_report.get("knowledge_search") or {}).get(key)
+            for key in (
+                "status",
+                "retrieval_mode",
+                "routing_mode",
+                "context_chars_used",
+                "embedding_model",
+                "embedding_profile_fingerprint",
+                "evidence_validation",
+                "selected_valid_count",
+                "errors",
+            )
+        },
         "snippets": compact_snippets,
         "snippet_count": len(snippets),
         "note": search_report.get("note"),
@@ -1739,7 +1771,13 @@ def _apply_data_capability_audit_to_candidates(
     return payload
 
 
-def run_search_stage(user_prompt: str, data_profile: dict[str, Any], enabled: bool, extra_queries: list[str] | None) -> dict[str, Any]:
+def run_search_stage(
+    user_prompt: str,
+    data_profile: dict[str, Any],
+    enabled: bool,
+    extra_queries: list[str] | None,
+    knowledge_search_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     queries = list(DEFAULT_YIELD_SEARCH_QUERIES)
     if extra_queries:
         queries.extend(extra_queries)
@@ -1747,9 +1785,15 @@ def run_search_stage(user_prompt: str, data_profile: dict[str, Any], enabled: bo
         queries.append(f"{user_prompt} yield stress prediction machine learning rheology")
     source_payload = _try_external_search(enabled, user_prompt, queries)
     snippets = source_payload.get("sources", [])
-    return {
+    external_report = {
         "stage": "search",
-        "enabled": bool(enabled),
+        "enabled": bool(
+            enabled
+            or (
+                knowledge_search_report
+                and knowledge_search_report.get("status") != "disabled"
+            )
+        ),
         "user_prompt": user_prompt,
         "queries": queries,
         "snippets": snippets,
@@ -1759,11 +1803,9 @@ def run_search_stage(user_prompt: str, data_profile: dict[str, Any], enabled: bo
         "source_quality": source_payload.get("source_quality", {}),
         "data_schema": data_profile.get("schema", {}).get("source_schema"),
         "data_columns": data_profile.get("columns", []),
-        "note": (
-            "External search returned snippets." if snippets else
-            "No external snippets were available; using local design references only."
-        ),
+        "note": "External search returned snippets." if snippets else "External search returned no snippets.",
     }
+    return merge_domain_search_report(external_report, knowledge_search_report)
 
 
 def run_model_plan_stage(
@@ -1773,6 +1815,8 @@ def run_model_plan_stage(
     search_report: dict[str, Any],
     candidate_report: dict[str, Any] | None = None,
     manager_feedback: str = "",
+    repair_memory_context: str = "",
+    session_context: str = "",
 ) -> dict[str, Any]:
     prompt_search_report = _compact_search_report_for_prompt(search_report, max_snippets=18)
     prompt = f"""
@@ -1781,6 +1825,9 @@ modeling plan for OperationAgent. Do not write code.
 
 User prompt:
 {user_prompt}
+
+Bounded session context, if any. Current explicit constraints override older memories:
+{session_context or "None. Use only the current user prompt and run-local evidence."}
 
 Data profile:
 {json.dumps(data_profile, ensure_ascii=False, indent=2)}
@@ -1796,6 +1843,9 @@ Candidate report:
 
 Manager revision feedback from previous failed execution, if any:
 {manager_feedback or "None. This is the first planning round."}
+
+Verified cross-run repair memories, if any:
+{repair_memory_context or "None. Do not assume an unverified historical fix."}
 
 Requirements:
 - Keep the final model flexible and runnable in the current repository.
@@ -1840,7 +1890,7 @@ Requirements:
   or multi-fidelity approach.
 - If recommending a mechanistic model, name the paper/source and exact formula
   that OperationAgent must document in mechanism_report.json.
-- When external snippets are available, mechanisms_to_use must cite searched
+- When retrieved evidence snippets are available, mechanisms_to_use must cite searched
   source_id values and should include the searched title/link/DOI for each
   mechanistic claim. Local design notes may be background, but they are not a
   substitute for external source evidence when SearchAgent found snippets.
@@ -1891,6 +1941,8 @@ def run_candidate_stage(
     data_profile: dict[str, Any],
     search_report: dict[str, Any],
     manager_feedback: str = "",
+    repair_memory_context: str = "",
+    session_context: str = "",
 ) -> dict[str, Any]:
     prompt_search_report = _compact_search_report_for_prompt(search_report, max_snippets=20)
     prompt = f"""
@@ -1899,7 +1951,7 @@ You are the CandidateAgent for yield-stress AutoML.
 Generate candidate model families, candidate mechanisms, candidate fusion specs
 (how a model and a mechanism combine), optional executor specs (how the fixed
 harness would execute a non-builtin fusion), and explicit model-mechanism hybrid
-strategies from external search snippets and the current data schema. Do not
+strategies from retrieved knowledge/external evidence and the current data schema. Do not
 write executable code in this JSON; OperationAgent will turn your
 model/mechanism briefs into bounded code under separate safety contracts.
 
@@ -1942,6 +1994,9 @@ Workflow you must follow:
 User prompt:
 {user_prompt}
 
+Bounded session context, if any. Current explicit constraints override older memories:
+{session_context or "None. Use only the current user prompt and run-local evidence."}
+
 Data profile:
 {json.dumps(data_profile, ensure_ascii=False, indent=2)}
 
@@ -1950,6 +2005,9 @@ Search report:
 
 Manager revision feedback from previous failed execution, if any:
 {manager_feedback or "None. This is the first candidate-generation round."}
+
+Verified cross-run repair memories, if any:
+{repair_memory_context or "None. Do not assume an unverified historical fix."}
 
 Return strict JSON with:
 - model_primitives: 3 to 8 items extracted from literature. Each item needs id,
@@ -2287,6 +2345,7 @@ def _profile_dataset(path: str) -> dict[str, Any]:
         "columns": df.columns.tolist(),
         "n_rows": int(len(df)),
         "numeric_summary": describe,
+        "dataset_lineage": summarize_dataset_lineage(df, meta),
     }
     profile["data_capability_audit"] = _infer_data_capability_audit(profile)
     return profile
@@ -2477,8 +2536,8 @@ def build_code_instructions(
             synthetic_report = json.loads(Path(synthetic_report_path).read_text(encoding="utf-8"))
         except Exception:
             synthetic_report = {}
-    external_snippets = search_report.get("snippets") or []
-    has_external_snippets = bool(external_snippets)
+    retrieved_snippets = search_report.get("snippets") or []
+    has_retrieved_evidence = bool(retrieved_snippets)
     references = json.dumps(REFERENCE_MECHANISM_NOTES, ensure_ascii=False, indent=2)
     search_report_json = json.dumps(search_report, ensure_ascii=False, indent=2)
     model_plan_json = json.dumps(model_plan, ensure_ascii=False, indent=2)
@@ -2488,9 +2547,10 @@ def build_code_instructions(
     anchor_profile_json = json.dumps(anchor_profile, ensure_ascii=False, indent=2)
     synthetic_info_json = json.dumps(synthetic_info or {}, ensure_ascii=False, indent=2)
     synthetic_report_json = json.dumps(synthetic_report, ensure_ascii=False, indent=2)
-    if has_external_snippets:
+    if has_retrieved_evidence:
         local_reference_section = (
-            "External search returned snippets, so local reference mechanisms are NOT "
+            "SearchAgent returned validated knowledge/external evidence, so untraced local "
+            "reference mechanisms are NOT "
             "injected as model candidates for this run. Treat this section as omitted; "
             "any mechanistic model used must be justified from SearchAgent snippets or "
             "from the user's prompt, and must cite the searched title/link/source in "
@@ -2498,7 +2558,7 @@ def build_code_instructions(
         )
     else:
         local_reference_section = (
-            "External search returned no snippets or local fallback was allowed. These "
+            "SearchAgent returned no validated evidence or local fallback was allowed. These "
             "references are background candidates, not mandatory model choices. If you "
             "use any of them or a variant, document the exact formula and paper/source "
             "in mechanism_report.json.\n"
@@ -2513,7 +2573,7 @@ script from another project. Use the dataset profile and SearchAgent report,
 then choose a modeling approach that is runnable in the current Python
 environment.
 
-{_core_yield_context() if has_external_snippets else YIELD_DOMAIN_CONTEXT}
+{_core_yield_context() if has_retrieved_evidence else YIELD_DOMAIN_CONTEXT}
 
 # User request
 {user_prompt}
@@ -2540,9 +2600,10 @@ logs/synthetic_data_report.json or include them in metrics/metrics.json.
 {local_reference_section}
 
 # SearchAgent report
-This stage runs before OperationAgent. It may include external snippets or a
-fallback note when search is not configured. If you use a mechanistic claim from
-a snippet, record the title/link/source in mechanism_report.json.
+This stage runs before OperationAgent. It may include validated knowledge-base
+chunks, external snippets, or a fallback note when search is unavailable. If
+you use a mechanistic claim from a snippet, record its stable chunk/source
+identity and title/link/source in mechanism_report.json.
 {search_report_json}
 
 # CandidateAgent report
@@ -2981,8 +3042,15 @@ class YieldAgentManager:
     def _run_data_agent(self) -> None:
         self._transition("DATA", "DataAgent preparing active training and anchor data.")
         data_path = str(Path(self.args.data_path).resolve())
-        test_path = str(Path(self.args.test_path).resolve())
+        configured_test_path = str(self.args.test_path or "").strip()
+        test_path = str(Path(configured_test_path).resolve()) if configured_test_path else ""
         anchor_compatibility_note = ""
+        anchor_audit: dict[str, Any] = {
+            "status": "not_configured" if not test_path else "pending",
+            "compatible": False,
+            "guardrail_action": "disable_anchor_validation",
+            "reasons": [],
+        }
         if self.args.synthetic_data:
             print("YIELD_STAGE: synthetic_data")
             generated = ensure_default_synthetic_yield_data(
@@ -3014,30 +3082,60 @@ class YieldAgentManager:
                 mirror=False,
             )
 
-        if not self.args.synthetic_data and test_path and Path(test_path).exists():
+        if test_path and Path(test_path).exists():
             try:
-                _train_df, train_meta = load_yield_dataframe(data_path)
-                _test_df, test_meta = load_yield_dataframe(test_path)
-                default_lian_anchor = Path(test_path).resolve() == Path(DEFAULT_LIAN_TEST_PATH).resolve()
-                incompatible_generated_anchor = (
-                    str(train_meta.get("source_schema") or "") == "generated_yield_process_202607"
-                    and str(test_meta.get("source_schema") or "").startswith("lian2025")
+                train_df, train_meta = load_yield_dataframe(data_path)
+                test_df, test_meta = load_yield_dataframe(test_path)
+                training_lineage = summarize_dataset_lineage(train_df, train_meta)
+                anchor_lineage = summarize_dataset_lineage(test_df, test_meta)
+                anchor_audit = audit_anchor_compatibility(
+                    train_meta,
+                    test_meta,
+                    training_lineage=training_lineage,
+                    anchor_lineage=anchor_lineage,
                 )
                 allow_incompatible = str(os.environ.get("YIELD_ALLOW_INCOMPATIBLE_ANCHOR") or "").lower() in {
                     "1", "true", "yes", "on"
                 }
-                if default_lian_anchor and incompatible_generated_anchor and not allow_incompatible:
+                anchor_audit["path"] = test_path
+                anchor_audit["forced"] = bool(allow_incompatible and not anchor_audit["compatible"])
+                if not anchor_audit["compatible"] and not allow_incompatible:
                     anchor_compatibility_note = (
-                        "Default Lian Table6 anchor disabled for generated_yield_process_202607 training data; "
-                        "schemas/target scales are incompatible. Set YIELD_ALLOW_INCOMPATIBLE_ANCHOR=1 to force it."
+                        "Anchor disabled by compatibility guardrail: "
+                        + "; ".join(anchor_audit.get("reasons") or ["unknown incompatibility"])
                     )
                     test_path = ""
                     os.environ.pop("YIELD_ANCHOR_PATH", None)
                     _emit_event("data", "Data Agent:", anchor_compatibility_note, mirror=False)
+                elif anchor_audit["compatible"]:
+                    anchor_compatibility_note = "Anchor compatibility audit passed."
+                else:
+                    anchor_audit["guardrail_action"] = "forced_enable_incompatible_anchor"
+                    anchor_compatibility_note = (
+                        "Incompatible anchor was explicitly forced with YIELD_ALLOW_INCOMPATIBLE_ANCHOR=1."
+                    )
             except Exception as exc:
                 anchor_compatibility_note = (
                     f"Anchor compatibility audit skipped: {type(exc).__name__}: {exc}"
                 )
+                anchor_audit = {
+                    "status": "audit_failed",
+                    "compatible": False,
+                    "guardrail_action": "disable_anchor_validation",
+                    "reasons": [anchor_compatibility_note],
+                    "path": test_path,
+                }
+                test_path = ""
+        elif test_path:
+            anchor_compatibility_note = f"Configured anchor path does not exist: {test_path}"
+            anchor_audit = {
+                "status": "missing",
+                "compatible": False,
+                "guardrail_action": "disable_anchor_validation",
+                "reasons": [anchor_compatibility_note],
+                "path": test_path,
+            }
+            test_path = ""
 
         os.environ["YIELD_DATA_PATH"] = data_path
         os.environ["YIELD_TEST_PATH"] = test_path
@@ -3049,6 +3147,8 @@ class YieldAgentManager:
                 "active_training_data": os.environ["YIELD_DATA_PATH"],
                 "test_or_anchor_data": os.environ["YIELD_TEST_PATH"],
                 "anchor_compatibility_note": anchor_compatibility_note,
+                "dataset_lineage": self.train_profile.get("dataset_lineage", {}),
+                "anchor_audit": anchor_audit,
                 "synthetic_info": self.synthetic_info,
                 "profile": self.train_profile,
                 "capability_audit": _infer_data_capability_audit(self.train_profile),
@@ -3073,6 +3173,7 @@ class YieldAgentManager:
             (
                 "Task parsed: yield-stress AutoML regression.\n"
                 f"External search enabled={self.args.external_search}, "
+                f"knowledge search enabled={getattr(self.args, 'use_knowledge_search', False)}, "
                 f"require_search_results={self.args.require_search_results}.\n"
                 f"Synthetic data enabled={self.args.synthetic_data}; "
                 f"active_training_data={os.environ['YIELD_DATA_PATH']}.\n"
@@ -3105,37 +3206,41 @@ class YieldAgentManager:
         )
         self._transition("REQUIREMENT_DONE", "Requirement analysis recorded.")
 
-    def _run_search_agent(self) -> bool:
-        self._transition("SEARCH", "SearchAgent retrieving external yield-stress evidence.")
+    def _run_search_agent(
+        self,
+        knowledge_search_report: dict[str, Any] | None = None,
+    ) -> bool:
+        self._transition("SEARCH", "SearchAgent retrieving routed knowledge and external yield-stress evidence.")
         print("YIELD_STAGE: search")
         self.search_report = run_search_stage(
             self.args.prompt,
             self.train_profile,
             self.args.external_search,
             self.args.query,
+            knowledge_search_report,
         )
         (self.run_dir / "search_report.json").write_text(
             json.dumps(self.search_report, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         print(f"YIELD_SEARCH_SNIPPETS: {len(self.search_report.get('snippets', []))}")
-        if self.args.external_search and self.args.require_search_results and not self.search_report.get("snippets"):
+        if self.args.require_search_results and not self.search_report.get("snippets"):
             result = {
                 "rcode": 2,
                 "stage": "search",
                 "action_result": (
-                    "External search was required, but SearchAgent returned zero snippets. "
-                    "OperationAgent was not executed. Check search API quota/configuration, "
-                    "or run with --no-require-search-results to allow local-reference fallback."
+                    "Search evidence was required, but the knowledge base and external search "
+                    "returned zero validated snippets. OperationAgent was not executed. Check "
+                    "knowledge readiness/search providers, or disable require_search_results."
                 ),
                 "search_report": self.search_report,
                 "code": "",
-                "error_logs": ["External search returned zero snippets."],
+                "error_logs": ["Knowledge-base and external search returned zero validated snippets."],
             }
             self._save_result(result)
             print("YIELD_STAGE: search_failed")
             print(result["action_result"])
-            self._transition("FAILED", "SearchAgent returned no required external snippets.", result)
+            self._transition("FAILED", "SearchAgent returned no required validated evidence.", result)
             return False
         self._transition(
             "SEARCH_DONE",
@@ -3143,11 +3248,18 @@ class YieldAgentManager:
             {
                 "snippet_count": len(self.search_report.get("snippets", [])),
                 "provider_summary": self.search_report.get("provider_summary", {}),
+                "evidence_counts": self.search_report.get("evidence_counts", {}),
+                "knowledge_status": (self.search_report.get("knowledge_search") or {}).get("status"),
             },
         )
         return True
 
-    def _run_candidate_agent(self, manager_feedback: str = "") -> None:
+    def _run_candidate_agent(
+        self,
+        manager_feedback: str = "",
+        repair_memory_context: str = "",
+        session_context: str = "",
+    ) -> None:
         self._transition(
             "CANDIDATE",
             "CandidateAgent revising model/mechanism candidates from manager feedback."
@@ -3171,10 +3283,16 @@ class YieldAgentManager:
             self.train_profile,
             self.search_report,
             manager_feedback=manager_feedback,
+            repair_memory_context=repair_memory_context,
+            session_context=session_context,
         )
         self.candidate_report["manager_revision_round"] = self.manager_revision_round
         if manager_feedback:
             self.candidate_report["manager_feedback"] = manager_feedback
+        if repair_memory_context:
+            self.candidate_report["verified_repair_memory_used"] = True
+        if session_context:
+            self.candidate_report["session_context_used"] = True
         self._run_candidate_benchmark_audit(manager_feedback=manager_feedback)
         (self.run_dir / "candidate_report.json").write_text(
             json.dumps(self.candidate_report, ensure_ascii=False, indent=2),
@@ -3302,7 +3420,12 @@ class YieldAgentManager:
             },
         )
 
-    def _run_model_agent(self, manager_feedback: str = "") -> None:
+    def _run_model_agent(
+        self,
+        manager_feedback: str = "",
+        repair_memory_context: str = "",
+        session_context: str = "",
+    ) -> None:
         self._transition(
             "PLAN",
             "ModelAgent revising implementation-ready plan from manager feedback."
@@ -3314,9 +3437,9 @@ class YieldAgentManager:
             "model",
             "ModelAgent:",
             (
-                f"Replanning from manager revision feedback with {len(self.search_report.get('snippets', []))} external snippets."
+                f"Replanning from manager revision feedback with {len(self.search_report.get('snippets', []))} retrieved evidence snippets."
                 if manager_feedback
-                else f"Planning with {len(self.search_report.get('snippets', []))} external snippets and normalized data schema."
+                else f"Planning with {len(self.search_report.get('snippets', []))} retrieved evidence snippets and normalized data schema."
             ),
             mirror=False,
         )
@@ -3327,10 +3450,16 @@ class YieldAgentManager:
             self.search_report,
             self.candidate_report,
             manager_feedback=manager_feedback,
+            repair_memory_context=repair_memory_context,
+            session_context=session_context,
         )
         self.model_plan["manager_revision_round"] = self.manager_revision_round
         if manager_feedback:
             self.model_plan["manager_feedback"] = manager_feedback
+        if repair_memory_context:
+            self.model_plan["verified_repair_memory_used"] = True
+        if session_context:
+            self.model_plan["session_context_used"] = True
         (self.run_dir / "model_plan.json").write_text(
             json.dumps(self.model_plan, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -3372,7 +3501,7 @@ class YieldAgentManager:
 
         snippets = self.search_report.get("snippets", [])
         add_check(
-            "external_search_evidence",
+            "search_evidence_available",
             (not self.args.require_search_results) or bool(snippets),
             f"snippets={len(snippets)}, require_search_results={self.args.require_search_results}",
         )

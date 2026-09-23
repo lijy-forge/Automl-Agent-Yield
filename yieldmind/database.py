@@ -241,6 +241,11 @@ def _ensure_knowledge_optional_columns(conn: sqlite3.Connection) -> None:
         "yieldmind_document_chunks": {
             "page_start": "INTEGER",
             "page_end": "INTEGER",
+            "parent_id": "TEXT NOT NULL DEFAULT ''",
+            "chunk_role": "TEXT NOT NULL DEFAULT 'content'",
+            "token_count": "INTEGER NOT NULL DEFAULT 0",
+            "split_version": "TEXT NOT NULL DEFAULT ''",
+            "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
         },
     }
     for table, additions in table_additions.items():
@@ -252,6 +257,12 @@ def _ensure_knowledge_optional_columns(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_yieldmind_documents_corpus
         ON yieldmind_documents(index_version, corpus, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_yieldmind_chunks_parent
+        ON yieldmind_document_chunks(parent_id, chunk_index)
         """
     )
 

@@ -15,7 +15,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yieldmind.document_loader import MAX_DOCUMENT_BYTES, SUPPORTED_DOCUMENT_SUFFIXES
-from yieldmind.knowledge_base import KnowledgeIngestRequest, KnowledgeSourceMetadata
+from yieldmind.knowledge_base import KnowledgeIngestRequest, KnowledgeSourceMetadata, SplitStrategy
 
 
 USER_AGENT = "YieldMind-Literature/1.0 (+local reproducible research ingestion)"
@@ -183,6 +183,7 @@ def build_literature_ingest_request(
     index_version: str,
     chunk_size: int = 700,
     chunk_overlap: int = 80,
+    split_strategy: SplitStrategy = "recursive_chars_v3",
 ) -> KnowledgeIngestRequest:
     root = Path(document_dir).expanduser().resolve()
     paths = [str(root / source.filename) for source in manifest.documents]
@@ -202,5 +203,6 @@ def build_literature_ingest_request(
         index_version=index_version,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        split_strategy=split_strategy,
         source_metadata=metadata,
     )

@@ -106,12 +106,18 @@ document_chunks = Table(
     Column("section", Text, nullable=False, server_default=""),
     Column("page_start", Integer),
     Column("page_end", Integer),
+    Column("parent_id", String(64), nullable=False, server_default=""),
+    Column("chunk_role", String(32), nullable=False, server_default="content"),
+    Column("token_count", Integer, nullable=False, server_default="0"),
+    Column("split_version", String(128), nullable=False, server_default=""),
+    Column("metadata_json", Text, nullable=False, server_default="{}"),
     Column("text_hash", String(128), nullable=False),
     Column("index_version", String(128), nullable=False),
     Column("text", Text, nullable=False),
     Column("created_at", Float, nullable=False),
 )
 Index("idx_yieldmind_chunks_document", document_chunks.c.document_id, document_chunks.c.document_version)
+Index("idx_yieldmind_chunks_parent", document_chunks.c.parent_id, document_chunks.c.chunk_index)
 
 sessions = Table(
     "yieldmind_sessions",
@@ -169,6 +175,43 @@ Index(
     memories.c.scope,
     memories.c.validation_status,
     memories.c.status,
+)
+
+repair_memory_reuse_attempts = Table(
+    "yieldmind_repair_memory_reuse_attempts",
+    metadata,
+    Column("reuse_id", String(64), primary_key=True),
+    Column("memory_id", String(64), ForeignKey("yieldmind_memories.memory_id"), nullable=False),
+    Column("run_id", String(64), ForeignKey("yieldmind_runs.run_id"), nullable=False),
+    Column("workspace_id", String(64), nullable=False),
+    Column("execution_mode", String(64), nullable=False),
+    Column("matched_round", Integer, nullable=False),
+    Column("applied_round", Integer, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("operation_rcode", Integer),
+    Column("manager_passed", Integer),
+    Column("manager_decision", Text, nullable=False, server_default=""),
+    Column("matched_at", Float, nullable=False),
+    Column("applied_at", Float, nullable=False),
+    Column("completed_at", Float),
+    Column("metadata_json", Text, nullable=False, server_default="{}"),
+    UniqueConstraint(
+        "memory_id",
+        "run_id",
+        "applied_round",
+        name="uq_yieldmind_repair_reuse_attempt",
+    ),
+)
+Index(
+    "idx_yieldmind_repair_reuse_workspace",
+    repair_memory_reuse_attempts.c.workspace_id,
+    repair_memory_reuse_attempts.c.status,
+    repair_memory_reuse_attempts.c.applied_at,
+)
+Index(
+    "idx_yieldmind_repair_reuse_memory",
+    repair_memory_reuse_attempts.c.memory_id,
+    repair_memory_reuse_attempts.c.applied_at,
 )
 
 stage_executions = Table(

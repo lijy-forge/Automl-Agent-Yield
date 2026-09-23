@@ -133,8 +133,20 @@ def run_managed_process(
     proc.start()
     stop_status = ""
     controller_error = ""
+    payload: Any = None
+    payload_received = False
 
     while proc.is_alive():
+        # Drain the queue while the worker is alive. Waiting for process exit
+        # before reading can deadlock when a large result fills the OS pipe:
+        # the worker waits for its Queue feeder to flush while the controller
+        # waits for the worker to exit.
+        try:
+            payload = result_queue.get_nowait()
+            payload_received = True
+            break
+        except queue.Empty:
+            pass
         elapsed = time.monotonic() - started
         if elapsed >= timeout_seconds:
             stop_status = "timed_out"
@@ -169,20 +181,32 @@ def run_managed_process(
             process_group=os.name == "posix",
         )
 
-    proc.join(timeout=0)
-    try:
-        payload = result_queue.get(timeout=1.0)
-    except queue.Empty:
-        return ManagedProcessOutcome(
-            status="no_result" if proc.exitcode == 0 else "failed",
-            error=f"Managed process exited without a result (exitcode={proc.exitcode}).",
-            pid=proc.pid,
-            exitcode=proc.exitcode,
-            duration_seconds=round(time.monotonic() - started, 4),
-            process_group=os.name == "posix",
-        )
-    finally:
-        result_queue.close()
+    if payload_received:
+        # The target has completed; let the worker finish interpreter/queue
+        # cleanup. If a descendant keeps it alive, clean up the process group
+        # without discarding the already received result.
+        proc.join(max(0.0, terminate_grace_seconds))
+        if proc.is_alive():
+            terminate_sent, kill_sent = _stop_process_tree(
+                proc,
+                terminate_grace_seconds=terminate_grace_seconds,
+            )
+    else:
+        proc.join(timeout=0)
+        try:
+            payload = result_queue.get(timeout=1.0)
+            payload_received = True
+        except queue.Empty:
+            result_queue.close()
+            return ManagedProcessOutcome(
+                status="no_result" if proc.exitcode == 0 else "failed",
+                error=f"Managed process exited without a result (exitcode={proc.exitcode}).",
+                pid=proc.pid,
+                exitcode=proc.exitcode,
+                duration_seconds=round(time.monotonic() - started, 4),
+                process_group=os.name == "posix",
+            )
+    result_queue.close()
 
     process_group = bool(payload.get("process_group")) if isinstance(payload, dict) else False
     if not isinstance(payload, dict) or not payload.get("ok"):
@@ -193,6 +217,8 @@ def run_managed_process(
             pid=proc.pid,
             exitcode=proc.exitcode,
             duration_seconds=round(time.monotonic() - started, 4),
+            terminate_sent=terminate_sent,
+            kill_sent=kill_sent,
             process_group=process_group,
         )
     return ManagedProcessOutcome(
@@ -201,5 +227,7 @@ def run_managed_process(
         pid=proc.pid,
         exitcode=proc.exitcode,
         duration_seconds=round(time.monotonic() - started, 4),
+        terminate_sent=terminate_sent,
+        kill_sent=kill_sent,
         process_group=process_group,
     )

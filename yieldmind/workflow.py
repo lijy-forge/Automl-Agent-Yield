@@ -22,6 +22,53 @@ from yieldmind.checkpointing import psycopg_connection_string
 from yieldmind.database import YieldMindStore
 from yieldmind.knowledge_base import DEFAULT_INDEX_VERSION
 from yieldmind.tools import OFFLINE_MODE, ToolRegistry, registry_for_workspace
+from yieldmind.tool_execution import ExecutionContext, ToolExecutor
+
+
+STAGE_AGENT_MAP = {
+    "start": "Agent Manager",
+    "prepare_data": "DataAgent",
+    "profile": "DataAgent",
+    "retrieve_evidence": "SearchAgent",
+    "evaluate": "ModelAgent",
+    "candidate_benchmark": "CandidateAgent",
+    "verify_artifacts": "ReviewAgent",
+    "report": "ReportAgent",
+    "local_repair": "Agent Manager",
+    "replan": "Agent Manager",
+    "cancel": "Agent Manager",
+    "finish": "Agent Manager",
+}
+
+STAGE_RUNNING_MESSAGES = {
+    "start": "正在创建运行记录并初始化工作流状态。",
+    "prepare_data": "正在检查数据路径并准备建模数据。",
+    "profile": "正在分析字段、样本规模与目标值分布。",
+    "retrieve_evidence": "正在检索并校验领域知识证据。",
+    "evaluate": "正在运行确定性固定基线与交叉验证。",
+    "candidate_benchmark": "正在评测候选模型与机理特征策略。",
+    "verify_artifacts": "正在核验报告、指标与运行产物。",
+    "report": "正在汇总选择依据并生成审计报告。",
+    "local_repair": "正在执行有界局部修复。",
+    "replan": "正在根据失败反馈重规划参数。",
+    "cancel": "正在安全终止工作流。",
+    "finish": "正在持久化最终状态。",
+}
+
+STAGE_ACTION_MAP = {
+    "start": "initialize_run",
+    "prepare_data": "prepare_dataset",
+    "profile": "profile_dataset",
+    "retrieve_evidence": "search_and_validate_evidence",
+    "evaluate": "evaluate_fixed_baselines",
+    "candidate_benchmark": "benchmark_candidate_strategies",
+    "verify_artifacts": "verify_run_artifacts",
+    "report": "build_audit_report",
+    "local_repair": "apply_local_repair",
+    "replan": "replan_workflow_inputs",
+    "cancel": "cancel_workflow",
+    "finish": "finalize_run",
+}
 
 
 class WorkflowRequest(BaseModel):
@@ -110,11 +157,93 @@ class YieldMindWorkflow:
         registry: ToolRegistry | None = None,
         cancel_check: Callable[[], bool] | None = None,
         on_run_started: Callable[[str], None] | None = None,
+        on_stage_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.store = store or YieldMindStore()
         self.registry = registry or registry_for_workspace(store=self.store)
+        self.executor = (
+            ToolExecutor(self.registry, store=self.store)
+            if isinstance(self.registry, ToolRegistry)
+            else None
+        )
         self.cancel_check = cancel_check
         self.on_run_started = on_run_started
+        self.on_stage_progress = on_stage_progress
+        self._activity_sequence = 0
+        self._active_activities: dict[str, dict[str, Any]] = {}
+        self._stage_attempts: dict[str, int] = {}
+        self._active_stage = ""
+
+    def _emit_progress(
+        self,
+        state: WorkflowState,
+        stage: str,
+        status: str,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = time.time()
+        if status == "running":
+            attempt = self._stage_attempts.get(stage, 0) + 1
+            self._stage_attempts[stage] = attempt
+            activity = {
+                "activity_id": f"activity_{uuid.uuid4().hex[:12]}",
+                "attempt": attempt,
+                "started_at": now,
+                "tool_calls": [],
+            }
+            self._active_activities[stage] = activity
+        else:
+            activity = self._active_activities.pop(
+                stage,
+                {
+                    "activity_id": f"activity_{uuid.uuid4().hex[:12]}",
+                    "attempt": self._stage_attempts.get(stage, 1),
+                    "started_at": now,
+                    "tool_calls": [],
+                },
+            )
+        self._activity_sequence += 1
+        completed_at = now if status != "running" else None
+        event = {
+            "type": "agent_progress",
+            "schema_version": "agent-activity-v1",
+            "activity_id": activity["activity_id"],
+            "sequence": self._activity_sequence,
+            "workflow_kind": "offline",
+            "agent": STAGE_AGENT_MAP.get(stage, "Agent Manager"),
+            "stage": stage,
+            "action": STAGE_ACTION_MAP.get(stage, stage),
+            "attempt": activity["attempt"],
+            "status": status,
+            "message": message,
+            "payload": payload or {},
+            "input_summary": payload or {} if status == "running" else {},
+            "output_summary": payload or {} if status != "running" else {},
+            "tool_calls": list(activity.get("tool_calls") or []),
+            "route_decision": (payload or {}).get("route_decision", {}),
+            "run_id": state.get("run_id", ""),
+            "thread_id": state.get("thread_id", ""),
+            "started_at": activity["started_at"],
+            "completed_at": completed_at,
+            "duration_ms": (
+                round((now - float(activity["started_at"])) * 1000.0, 3)
+                if completed_at is not None
+                else None
+            ),
+            "ts": now,
+        }
+        if self.on_stage_progress is not None:
+            try:
+                self.on_stage_progress(event)
+            except Exception:
+                # UI telemetry must never change workflow behavior.
+                pass
+        return event
+
+    def _stage_started(self, state: WorkflowState, stage: str) -> None:
+        self._active_stage = stage
+        self._emit_progress(state, stage, "running", STAGE_RUNNING_MESSAGES[stage])
 
     def _cancellation_requested(self, state: WorkflowState) -> bool:
         if state.get("cancelled"):
@@ -122,6 +251,7 @@ class YieldMindWorkflow:
         return self.cancel_check is not None and self.cancel_check()
 
     def _node_cancel(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "cancel")
         stages = state.get("stages", [])
         after_stage = stages[-1]["stage"] if stages else "start"
         state["cancelled"] = True
@@ -156,13 +286,38 @@ class YieldMindWorkflow:
         idempotency_key = hashlib.sha256(
             json.dumps(key_payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
-        result = self.registry.execute(
-            name,
-            args,
-            run_id=state.get("run_id"),
-            idempotency_key=idempotency_key,
-        )
+        tool_started = time.perf_counter()
+        if self.executor is not None:
+            result = self.executor.execute(
+                name,
+                args,
+                context=ExecutionContext(
+                    caller="workflow",
+                    execution_mode=OFFLINE_MODE,
+                    run_id=str(state.get("run_id") or ""),
+                ),
+                idempotency_key=idempotency_key,
+            )
+        else:
+            result = self.registry.execute(
+                name,
+                args,
+                run_id=state.get("run_id"),
+                idempotency_key=idempotency_key,
+            )
         payload = result.model_dump()
+        activity = self._active_activities.get(self._active_stage)
+        if activity is not None:
+            activity.setdefault("tool_calls", []).append(
+                {
+                    "tool": name,
+                    "status": "passed" if result.ok else "failed",
+                    "duration_ms": round((time.perf_counter() - tool_started) * 1000.0, 3),
+                    "input_fields": sorted(args),
+                    "artifact_names": sorted(result.artifacts),
+                    "error": result.error,
+                }
+            )
         state.setdefault("tool_results", []).append({"tool": name, "args": args, "result": payload})
         if result.artifacts:
             state.setdefault("artifacts", {}).update(result.artifacts)
@@ -178,6 +333,26 @@ class YieldMindWorkflow:
     ) -> None:
         _record(state, stage, status, message, payload)
         record = state["stages"][-1]
+        activity_event = self._emit_progress(state, stage, status, message, payload)
+        record.update(
+            {
+                key: activity_event[key]
+                for key in (
+                    "schema_version",
+                    "activity_id",
+                    "sequence",
+                    "workflow_kind",
+                    "agent",
+                    "action",
+                    "attempt",
+                    "started_at",
+                    "completed_at",
+                    "duration_ms",
+                    "tool_calls",
+                    "route_decision",
+                )
+            }
+        )
         run_id = state.get("run_id", "")
         if run_id:
             self.store.record_stage_execution(
@@ -189,9 +364,18 @@ class YieldMindWorkflow:
                 input_hash=record["input_hash"],
                 started_at=record["ts"],
                 completed_at=time.time(),
-                payload={"message": message, **(payload or {})},
+                payload={
+                    "message": message,
+                    "agent": record["agent"],
+                    "action": record["action"],
+                    "attempt": record["attempt"],
+                    "duration_ms": record["duration_ms"],
+                    "tool_calls": record["tool_calls"],
+                    **(payload or {}),
+                },
                 error=state.get("last_error", "") if status == "failed" else "",
             )
+        self._active_stage = ""
 
     def _stage_result(
         self,
@@ -227,6 +411,7 @@ class YieldMindWorkflow:
             state["errors"].append(reason)
 
     def _node_start(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "start")
         run_id = self.store.create_run(
             mode=state.get("workflow_backend", OFFLINE_MODE),
             source="yieldmind_workflow",
@@ -242,6 +427,7 @@ class YieldMindWorkflow:
         return state
 
     def _node_prepare_data(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "prepare_data")
         data_path = str(state.get("data_path") or "").strip()
         if data_path:
             path = Path(data_path).expanduser()
@@ -292,6 +478,7 @@ class YieldMindWorkflow:
         return state
 
     def _node_profile(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "profile")
         result = self._tool(state, "profile_yield_data", {"data_path": state.get("data_path", "")})
         self._stage_result(
             state,
@@ -304,6 +491,7 @@ class YieldMindWorkflow:
         return state
 
     def _node_retrieve_evidence(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "retrieve_evidence")
         if not state.get("use_knowledge"):
             state["last_node_ok"] = True
             state["failed_stage"] = ""
@@ -327,6 +515,10 @@ class YieldMindWorkflow:
                 "top_k": int(state.get("knowledge_top_k", 5)),
                 "index_version": state.get("knowledge_index_version", DEFAULT_INDEX_VERSION),
                 "retrieval_mode": state.get("knowledge_retrieval_mode", "hybrid"),
+                "routing_mode": "auto",
+                "expand_parent": True,
+                "deduplicate_parents": True,
+                "context_budget_chars": 12000,
             },
         )
         search_payload = search.get("result") or {}
@@ -359,6 +551,23 @@ class YieldMindWorkflow:
             "embedding_model": search_payload.get("embedding_model", ""),
             "embedding_profile_fingerprint": search_payload.get("embedding_profile_fingerprint", ""),
             "retrieval_mode": search_payload.get("retrieval_mode", ""),
+            "latency_ms": search_payload.get("latency_ms"),
+            "routing": search_payload.get("routing", {}),
+            "selection_policy": search_payload.get("selection_policy", {}),
+            "hit_summaries": [
+                {
+                    "rank": index,
+                    "title": hit.get("title", ""),
+                    "source_path": hit.get("source_path", ""),
+                    "corpus": hit.get("corpus", ""),
+                    "section": hit.get("section", ""),
+                    "page_start": hit.get("page_start"),
+                    "doi": hit.get("doi", ""),
+                    "chunk_role": hit.get("chunk_role", ""),
+                    "retrieval_channels": hit.get("retrieval_channels", []),
+                }
+                for index, hit in enumerate(hits, start=1)
+            ],
             "validation_ok": bool(validation.get("ok")),
         }
         self._stage_result(
@@ -366,12 +575,16 @@ class YieldMindWorkflow:
             stage="retrieve_evidence",
             result={"ok": ok, "error": error},
             message="Knowledge evidence retrieved and validated." if ok else "Knowledge evidence was not usable.",
-            payload=state["evidence_summary"],
+            payload={
+                **state["evidence_summary"],
+                "route_decision": state["evidence_summary"].get("routing", {}),
+            },
             failure_kind="fatal",
         )
         return state
 
     def _node_evaluate(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "evaluate")
         result = self._tool(
             state,
             "run_fixed_baseline_eval",
@@ -392,6 +605,7 @@ class YieldMindWorkflow:
         return state
 
     def _node_candidate_benchmark(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "candidate_benchmark")
         result = self._tool(
             state,
             "run_candidate_benchmark",
@@ -401,17 +615,24 @@ class YieldMindWorkflow:
                 "random_state": int(state.get("random_state", 42)),
             },
         )
-        selected = ((result.get("result") or {}).get("benchmark_report") or {}).get("selected_strategy_id")
+        benchmark_report = ((result.get("result") or {}).get("benchmark_report") or {})
+        selected = benchmark_report.get("selected_strategy_id")
+        final_selection = benchmark_report.get("final_selection") or {}
         self._stage_result(
             state,
             stage="candidate_benchmark",
             result=result,
             message="Candidate benchmark completed.",
-            payload={"selected_strategy_id": selected},
+            payload={
+                "selected_strategy_id": selected,
+                "final_winner_type": final_selection.get("winner_type"),
+                "final_winner_id": final_selection.get("winner_id"),
+            },
         )
         return state
 
     def _node_verify_artifacts(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "verify_artifacts")
         artifact_paths = {key: value for key, value in state.get("artifacts", {}).items() if value}
         result = self._tool(
             state,
@@ -436,6 +657,7 @@ class YieldMindWorkflow:
         return state
 
     def _node_report(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "report")
         result = self._tool(
             state,
             "build_run_report",
@@ -460,6 +682,7 @@ class YieldMindWorkflow:
         return state
 
     def _node_local_repair(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "local_repair")
         failed_stage = state.get("failed_stage", "")
         state["local_repair_count"] = int(state.get("local_repair_count", 0)) + 1
         if failed_stage in {"evaluate", "candidate_benchmark"}:
@@ -492,6 +715,7 @@ class YieldMindWorkflow:
         return state
 
     def _node_replan(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "replan")
         state["replan_count"] = int(state.get("replan_count", 0)) + 1
         state["local_repair_count"] = 0
         state["random_state"] = int(state.get("random_state", 42)) + state["replan_count"]
@@ -543,6 +767,7 @@ class YieldMindWorkflow:
         return "cancel" if self._cancellation_requested(state) else "prepare_data"
 
     def _node_finish(self, state: WorkflowState) -> WorkflowState:
+        self._stage_started(state, "finish")
         errors = state.get("errors", [])
         status = "cancelled" if state.get("cancelled") else "failed" if errors else "passed"
         state["status"] = status
@@ -713,10 +938,12 @@ def run_workflow(
     registry: ToolRegistry | None = None,
     cancel_check: Callable[[], bool] | None = None,
     on_run_started: Callable[[str], None] | None = None,
+    on_stage_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     return YieldMindWorkflow(
         store=store,
         registry=registry,
         cancel_check=cancel_check,
         on_run_started=on_run_started,
+        on_stage_progress=on_stage_progress,
     ).run(request)

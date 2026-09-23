@@ -33,7 +33,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.linear_model import Ridge
-from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupKFold, KFold
 from sklearn.neural_network import MLPRegressor
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import make_pipeline
@@ -331,6 +331,36 @@ def _feature_columns_with_fidelity(
     return cols
 
 
+def _multifidelity_group_config(
+    df: pd.DataFrame,
+    masks: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if masks is None:
+        return None
+    for column in ("base_hf_id", "raw_batch_id", "batch_id"):
+        if column not in df.columns:
+            continue
+        raw = df[column]
+        if raw.isna().any() or raw.astype(str).str.strip().eq("").any():
+            continue
+        values = raw.astype(str).to_numpy()
+        high_groups = values[np.asarray(masks["high_mask"], dtype=bool)]
+        low_groups = values[np.asarray(masks["low_mask"], dtype=bool)]
+        unique_high = sorted(set(high_groups.tolist()))
+        if len(unique_high) < 2:
+            continue
+        return {
+            "column": column,
+            "values": values,
+            "high_groups": high_groups,
+            "low_groups": low_groups,
+            "n_high_groups": len(unique_high),
+            "n_low_groups": len(set(low_groups.tolist())),
+            "n_shared_groups": len(set(high_groups.tolist()) & set(low_groups.tolist())),
+        }
+    return None
+
+
 def evaluate_candidate(
     candidate: Candidate,
     df: pd.DataFrame,
@@ -344,6 +374,7 @@ def evaluate_candidate(
     """Fold-local OOF (+ anchor) for one candidate. Returns metrics + predictions."""
     started = time.perf_counter()
     mf_masks = _fidelity_masks(df, candidate.spec)
+    group_config = _multifidelity_group_config(df, mf_masks)
     uses_mf = _candidate_uses_multifidelity(candidate)
     if uses_mf and mf_masks is None:
         return {
@@ -353,32 +384,67 @@ def evaluate_candidate(
             "error": "ValueError: multi_fidelity_base_residual requires both low_fidelity and high_fidelity rows.",
             "elapsed_seconds": float(time.perf_counter() - started),
         }
+    if uses_mf and group_config is None:
+        return {
+            "name": candidate.name,
+            "spec": candidate.spec,
+            "status": "failed",
+            "error": (
+                "ValueError: strict multi-fidelity evaluation requires base_hf_id/raw_batch_id "
+                "so LF rows matching validation HF groups can be excluded."
+            ),
+            "elapsed_seconds": float(time.perf_counter() - started),
+        }
 
     if mf_masks is not None:
         meta_feature_columns = _feature_columns_with_fidelity(feature_columns, df, mf_masks)
         X = df[meta_feature_columns].copy()
         low_idx = np.flatnonzero(mf_masks["low_mask"])
         high_idx = np.flatnonzero(mf_masks["high_mask"])
-        n_eff_splits = min(max(2, int(n_splits)), len(high_idx))
-        splitter = KFold(n_splits=n_eff_splits, shuffle=True, random_state=random_state)
+        if group_config is not None:
+            n_eff_splits = min(max(2, int(n_splits)), int(group_config["n_high_groups"]))
+            splitter = GroupKFold(n_splits=n_eff_splits)
+            split_iterator = splitter.split(high_idx, groups=group_config["high_groups"])
+            split_strategy = "group_kfold"
+        else:
+            n_eff_splits = min(max(2, int(n_splits)), len(high_idx))
+            splitter = KFold(n_splits=n_eff_splits, shuffle=True, random_state=random_state)
+            split_iterator = splitter.split(high_idx)
+            split_strategy = "kfold"
         oof = np.zeros(len(high_idx), dtype=float)
         fold_rows: list[dict[str, Any]] = []
         try:
-            for fold, (hf_train_rel, hf_valid_rel) in enumerate(splitter.split(high_idx), start=1):
+            for fold, (hf_train_rel, hf_valid_rel) in enumerate(split_iterator, start=1):
                 hf_train_idx = high_idx[hf_train_rel]
                 valid_idx = high_idx[hf_valid_rel]
-                train_idx = (
-                    np.concatenate([low_idx, hf_train_idx])
-                    if uses_mf else hf_train_idx
-                )
+                valid_groups: set[str] = set()
+                hf_train_groups: set[str] = set()
+                lf_train_idx = low_idx
+                lf_excluded_idx = np.asarray([], dtype=int)
+                if group_config is not None:
+                    valid_groups = set(group_config["high_groups"][hf_valid_rel].tolist())
+                    hf_train_groups = set(group_config["high_groups"][hf_train_rel].tolist())
+                    low_is_valid_group = np.isin(group_config["low_groups"], list(valid_groups))
+                    lf_train_idx = low_idx[~low_is_valid_group]
+                    lf_excluded_idx = low_idx[low_is_valid_group]
+                train_idx = np.concatenate([lf_train_idx, hf_train_idx]) if uses_mf else hf_train_idx
                 est = candidate.factory()
                 est.fit(X.iloc[train_idx], y[train_idx])
                 oof[hf_valid_rel] = np.asarray(est.predict(X.iloc[valid_idx]), dtype=float)
                 fold_rows.append({
                     "fold": int(fold),
-                    "n_lf_train": int(len(low_idx) if uses_mf else 0),
+                    "n_lf_train": int(len(lf_train_idx) if uses_mf else 0),
+                    "n_lf_excluded_for_validation_groups": int(len(lf_excluded_idx) if uses_mf else 0),
                     "n_hf_train": int(len(hf_train_idx)),
                     "n_hf_valid": int(len(valid_idx)),
+                    "n_hf_train_groups": int(len(hf_train_groups)) if group_config is not None else None,
+                    "n_hf_valid_groups": int(len(valid_groups)) if group_config is not None else None,
+                    "train_valid_group_overlap": sorted(hf_train_groups & valid_groups),
+                    "lf_train_validation_group_overlap": (
+                        sorted(set(group_config["low_groups"][~np.isin(group_config["low_groups"], list(valid_groups))].tolist()) & valid_groups)
+                        if uses_mf and group_config is not None
+                        else []
+                    ),
                 })
         except Exception as exc:
             return {"name": candidate.name, "spec": candidate.spec, "status": "failed",
@@ -394,13 +460,26 @@ def evaluate_candidate(
             "_oof_indices": high_idx,
             "elapsed_seconds": float(time.perf_counter() - started),
             "evaluation_protocol": {
-                "type": "high_fidelity_oof",
+                "type": "high_fidelity_group_oof" if group_config is not None else "high_fidelity_oof",
+                "split_strategy": split_strategy,
                 "candidate_uses_low_fidelity": bool(uses_mf),
                 "n_low_fidelity_available": int(len(low_idx)),
                 "n_high_fidelity_available": int(len(high_idx)),
                 "n_splits": int(n_eff_splits),
                 "folds": fold_rows,
                 "metric_scope": "high_fidelity_rows_only",
+                "group_column": group_config.get("column") if group_config is not None else None,
+                "n_high_fidelity_groups": group_config.get("n_high_groups") if group_config is not None else None,
+                "n_low_fidelity_groups": group_config.get("n_low_groups") if group_config is not None else None,
+                "n_shared_groups": group_config.get("n_shared_groups") if group_config is not None else None,
+                "strict_group_isolation_passed": bool(
+                    group_config is not None
+                    and all(
+                        not row["train_valid_group_overlap"]
+                        and not row["lf_train_validation_group_overlap"]
+                        for row in fold_rows
+                    )
+                ),
             },
         }
         if anchor_df is not None and len(anchor_df) > 0:
@@ -629,8 +708,13 @@ def run_joint_search(
     feature_columns = _feature_columns(meta, df)
     y = pd.to_numeric(df[TARGET_COLUMN], errors="coerce").to_numpy(float)
     dataset_mf_masks = _fidelity_masks(df)
+    dataset_group_config = _multifidelity_group_config(df, dataset_mf_masks)
     if dataset_mf_masks is not None:
-        eval_n = int(dataset_mf_masks["high_count"])
+        eval_n = int(
+            dataset_group_config["n_high_groups"]
+            if dataset_group_config is not None
+            else dataset_mf_masks["high_count"]
+        )
     else:
         eval_n = int(len(df))
     n_splits = min(max(2, int(n_splits)), max(2, eval_n))
@@ -652,20 +736,42 @@ def run_joint_search(
     if dataset_mf_masks is not None:
         high_idx = np.flatnonzero(dataset_mf_masks["high_mask"])
         baseline_df = df.iloc[high_idx].reset_index(drop=True)
+        baseline_groups = (
+            baseline_df[str(dataset_group_config["column"])].astype(str).to_numpy()
+            if dataset_group_config is not None
+            else None
+        )
         baseline_summary = _evaluate_baseline_summary(
             baseline_df,
             feature_columns,
             n_splits=n_splits,
             random_state=random_state,
+            groups=baseline_groups,
+            group_column=str(dataset_group_config["column"]) if dataset_group_config is not None else None,
         )
         evaluation_protocol = {
-            "type": "high_fidelity_oof",
+            "type": "high_fidelity_group_oof" if dataset_group_config is not None else "high_fidelity_oof",
+            "split_strategy": "group_kfold" if dataset_group_config is not None else "kfold",
             "metric_scope": "high_fidelity_rows_only",
             "ordinary_candidates_train_on": "high_fidelity_train_fold_only",
-            "multi_fidelity_candidates_train_on": "all_low_fidelity_rows_plus_high_fidelity_train_fold",
+            "multi_fidelity_candidates_train_on": (
+                "low_fidelity_rows_excluding_validation_groups_plus_high_fidelity_train_fold"
+                if dataset_group_config is not None
+                else "rejected_without_group_metadata"
+            ),
             "n_low_fidelity": int(dataset_mf_masks["low_count"]),
             "n_high_fidelity": int(dataset_mf_masks["high_count"]),
             "fidelity_column": str(dataset_mf_masks["column"]),
+            "group_column": dataset_group_config.get("column") if dataset_group_config is not None else None,
+            "n_high_fidelity_groups": dataset_group_config.get("n_high_groups") if dataset_group_config is not None else None,
+            "n_low_fidelity_groups": dataset_group_config.get("n_low_groups") if dataset_group_config is not None else None,
+            "n_shared_groups": dataset_group_config.get("n_shared_groups") if dataset_group_config is not None else None,
+            "strict_group_isolation": bool(dataset_group_config is not None),
+            "group_guardrail": (
+                "enabled"
+                if dataset_group_config is not None
+                else "missing_group_metadata_multifidelity_candidates_rejected"
+            ),
         }
     else:
         baseline_summary = _evaluate_baseline_summary(
@@ -879,6 +985,7 @@ def run_joint_search(
         "n_candidates": len(candidates),
         "n_evaluated": len(evaluated),
         "n_viable": sum(1 for r in evaluated if r.get("viable")),
+        "fixed_baseline": baseline_summary,
         "best_fixed_baseline_oof_rmse": best_baseline_rmse,
         "baseline_improvement_threshold": baseline_improvement_threshold,
         "min_anchor_r2": min_anchor_r2,

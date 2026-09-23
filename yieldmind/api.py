@@ -5,14 +5,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
 import sys
+import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from knowledge.yield_data_lineage import summarize_dataset_lineage
+from knowledge.yield_schema import TARGET_COLUMN, load_yield_dataframe
 from yieldmind.database import YieldMindStore
 from yieldmind.domain_workflow import DomainWorkflowRequest, run_domain_workflow
 from yieldmind.evaluation import run_offline_evaluation
@@ -33,6 +39,7 @@ from yieldmind.memory import (
     UpdateSessionSummaryRequest,
     UpsertMemoryRequest,
 )
+from yieldmind.repair_memory import RepairMemoryStore
 from yieldmind.safety import (
     BudgetRequest,
     EvidenceValidationRequest,
@@ -42,6 +49,7 @@ from yieldmind.safety import (
     validate_evidence_refs,
 )
 from yieldmind.tools import OFFLINE_MODE, registry_for_workspace
+from yieldmind.tool_execution import ExecutionContext, ToolExecutor
 from yieldmind.task_queue import (
     EnqueueWorkflowRequest,
     EnqueueDomainWorkflowRequest,
@@ -61,6 +69,9 @@ from yieldmind.workflow import WorkflowRequest, run_workflow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+DEFAULT_YIELD_CSV = PROJECT_ROOT / "agent_workspace/data/generated_yield_stress/generated_yield_stress_data_engineered.csv"
+UPLOAD_DIR = PROJECT_ROOT / "agent_workspace/yieldmind/uploads"
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 class CreateRunRequest(BaseModel):
@@ -69,9 +80,20 @@ class CreateRunRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ReconfirmRepairMemoryRequest(BaseModel):
+    evidence_run_id: str = Field(min_length=1)
+    reviewer: str = Field(default="api_user", min_length=1, max_length=128)
+    note: str = Field(default="", max_length=1000)
+
+
 class ToolCallRequest(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     run_id: str | None = None
+    actor_id: str = "local_api_user"
+    allow_subprocess: bool = False
+    allow_docker: bool = False
+    allow_live_llm: bool = False
+    allow_knowledge_write: bool = False
 
 
 app = FastAPI(
@@ -79,6 +101,7 @@ app = FastAPI(
     version="0.1.0",
     description="Service/database/tool layer for the yield-stress AutoML agent.",
 )
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 store = YieldMindStore()
 
 
@@ -127,6 +150,73 @@ def dependency_health() -> JSONResponse:
         "knowledge": knowledge_status,
     }
     return JSONResponse(status_code=200 if payload["ok"] else 503, content=payload)
+
+
+@app.get("/api/data/default")
+def default_dataset() -> dict[str, Any]:
+    if not DEFAULT_YIELD_CSV.is_file():
+        raise HTTPException(status_code=404, detail="Default yield-stress CSV is not available.")
+    try:
+        dataframe, metadata = load_yield_dataframe(DEFAULT_YIELD_CSV)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Default CSV validation failed: {exc}") from exc
+    lineage = summarize_dataset_lineage(dataframe, metadata)
+    return {
+        "ok": True,
+        "data_path": str(DEFAULT_YIELD_CSV),
+        "filename": DEFAULT_YIELD_CSV.name,
+        "row_count": int(len(dataframe)),
+        "column_count": int(len(dataframe.columns)),
+        "target_column": TARGET_COLUMN,
+        "data_kind": "augmented_demo",
+        "schema": metadata.get("schema", metadata.get("source_schema", "yield_stress")),
+        **lineage,
+    }
+
+
+@app.post("/api/data/upload")
+async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
+    original_name = Path(file.filename or "").name
+    if not original_name or Path(original_name).suffix.lower() != ".csv":
+        raise HTTPException(status_code=400, detail="Only .csv files are accepted.")
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    destination = UPLOAD_DIR / f"dataset_{uuid.uuid4().hex}.csv"
+    total_bytes = 0
+    try:
+        with destination.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="CSV exceeds the 10 MB upload limit.")
+                output.write(chunk)
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="Uploaded CSV is empty.")
+        dataframe, metadata = load_yield_dataframe(destination)
+        if dataframe.empty:
+            raise HTTPException(status_code=400, detail="CSV contains no valid yield-stress rows.")
+    except HTTPException:
+        destination.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"CSV schema validation failed: {exc}") from exc
+    finally:
+        await file.close()
+
+    lineage = summarize_dataset_lineage(dataframe, metadata)
+    return {
+        "ok": True,
+        "data_path": str(destination),
+        "original_filename": original_name,
+        "stored_filename": destination.name,
+        "row_count": int(len(dataframe)),
+        "column_count": int(len(dataframe.columns)),
+        "target_column": TARGET_COLUMN,
+        "data_kind": "user_upload",
+        "schema": metadata.get("schema", metadata.get("source_schema", "yield_stress")),
+        **lineage,
+    }
 
 
 @app.post("/api/runs")
@@ -189,7 +279,26 @@ def list_tools() -> dict[str, Any]:
 def call_tool(tool_name: str, request: ToolCallRequest) -> JSONResponse:
     if request.run_id and not store.get_run(request.run_id):
         raise HTTPException(status_code=404, detail="run not found")
-    result = registry.execute(tool_name, request.args, run_id=request.run_id)
+    grants = {
+        grant
+        for allowed, grant in (
+            (request.allow_subprocess, "subprocess_execute"),
+            (request.allow_docker, "docker_execute"),
+            (request.allow_live_llm, "live_llm"),
+            (request.allow_knowledge_write, "knowledge_write"),
+        )
+        if allowed
+    }
+    result = ToolExecutor(registry, store=store).execute(
+        tool_name,
+        request.args,
+        context=ExecutionContext(
+            actor_id=request.actor_id,
+            caller="api",
+            run_id=str(request.run_id or ""),
+            grants=grants,
+        ),
+    )
     if request.run_id:
         event_payload = redact_payload(RedactRequest(payload=result.model_dump())).payload
         store.add_event(
@@ -321,6 +430,24 @@ def search_memories(session_id: str = "", workspace_id: str = "default", limit: 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/repair-memory/reuse-summary")
+def repair_memory_reuse_summary(
+    workspace_id: str = "",
+    include_attempts: bool = False,
+    limit: int = 100,
+) -> dict[str, Any]:
+    repair = RepairMemoryStore(store)
+    response: dict[str, Any] = {
+        "summary": repair.reuse_outcome_summary(workspace_id=workspace_id),
+    }
+    if include_attempts:
+        response["attempts"] = repair.list_reuse_attempts(
+            workspace_id=workspace_id,
+            limit=max(1, min(limit, 1000)),
+        )
+    return response
+
+
 @app.post("/api/memories/{memory_id}/review")
 def review_memory(memory_id: str, request: ReviewMemoryRequest) -> dict[str, Any]:
     if request.memory_id != memory_id:
@@ -333,6 +460,24 @@ def review_memory(memory_id: str, request: ReviewMemoryRequest) -> dict[str, Any
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/memories/{memory_id}/reconfirm")
+def reconfirm_repair_memory(memory_id: str, request: ReconfirmRepairMemoryRequest) -> dict[str, Any]:
+    try:
+        memory = RepairMemoryStore(store).reconfirm_from_passed_run(
+            memory_id,
+            evidence_run_id=request.evidence_run_id,
+            reviewer=request.reviewer,
+            note=request.note,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if memory is None:
+        raise HTTPException(status_code=400, detail="memory is not an active confirmed repair memory")
+    return {"memory": memory}
+
+
 @app.delete("/api/memories/{memory_id}")
 def delete_memory(memory_id: str) -> dict[str, Any]:
     return SessionMemoryStore(store).delete_memory(DeleteMemoryRequest(memory_id=memory_id))
@@ -343,9 +488,67 @@ def run_offline_workflow(request: WorkflowRequest) -> dict[str, Any]:
     return run_workflow(request, store=store)
 
 
+@app.post("/api/workflows/offline/stream")
+async def stream_offline_workflow(request: WorkflowRequest) -> StreamingResponse:
+    events: queue.Queue[dict[str, Any] | None] = queue.Queue()
+
+    def execute() -> None:
+        try:
+            result = run_workflow(request, store=store, on_stage_progress=events.put)
+            events.put({"type": "result", "result": result})
+        except Exception as exc:
+            events.put({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            events.put(None)
+
+    threading.Thread(target=execute, name="yieldmind-workflow-stream", daemon=True).start()
+
+    async def generate():
+        while True:
+            event = await asyncio.to_thread(events.get)
+            if event is None:
+                break
+            yield json.dumps(event, ensure_ascii=False, default=str) + "\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/workflows/domain")
 def run_live_domain_workflow(request: DomainWorkflowRequest) -> dict[str, Any]:
     return run_domain_workflow(request, store=store)
+
+
+@app.post("/api/workflows/domain/stream")
+async def stream_live_domain_workflow(request: DomainWorkflowRequest) -> StreamingResponse:
+    events: queue.Queue[dict[str, Any] | None] = queue.Queue()
+
+    def execute() -> None:
+        try:
+            result = run_domain_workflow(request, store=store, on_stage_progress=events.put)
+            events.put({"type": "result", "result": result})
+        except Exception as exc:
+            events.put({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            events.put(None)
+
+    threading.Thread(target=execute, name="yieldmind-domain-workflow-stream", daemon=True).start()
+
+    async def generate():
+        while True:
+            event = await asyncio.to_thread(events.get)
+            if event is None:
+                break
+            yield json.dumps(event, ensure_ascii=False, default=str) + "\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/tasks/workflows/offline", status_code=202)
