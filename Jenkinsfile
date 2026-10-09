@@ -33,15 +33,13 @@ pipeline {
 
         stage('Test') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    sh '''
-                        set -eux
-                        mkdir -p reports
-                        .venv-ci/bin/python -m pytest -q \
-                            tests/test_model_usage.py \
-                            --junitxml=reports/pytest.xml
-                    '''
-                }
+                sh '''
+                    set -eux
+                    mkdir -p reports
+                    .venv-ci/bin/python -m pytest -q \
+                        tests/test_model_usage.py \
+                        --junitxml=reports/pytest.xml
+                '''
             }
         }
 
