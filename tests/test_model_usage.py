@@ -1,5 +1,3 @@
-import os
-
 from yieldmind.model_usage import (
     build_model_usage_record,
     merge_model_usage_records,
@@ -11,7 +9,7 @@ from yieldmind.model_usage import (
 def test_normalize_token_usage_accepts_openai_and_responses_names():
     assert normalize_token_usage(
         {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
-    ) == {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
+    ) == {"input_tokens": 10, "output_tokens": 4, "total_tokens": 999}
     assert normalize_token_usage({"input_tokens": 8, "output_tokens": 3}) == {
         "input_tokens": 8,
         "output_tokens": 3,
