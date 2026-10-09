@@ -5,10 +5,27 @@ pipeline {
         skipDefaultCheckout(true)
     }
 
+    parameters {
+        string(
+            name: 'BRANCH',
+            defaultValue: 'jenkins-lab',
+            description: '要构建的 Git 分支'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'production'],
+            description: '模拟部署环境'
+        )
+    }
+
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                deleteDir()
+                git branch: params.BRANCH,
+                    url: 'https://github.com/lijy-forge/Automl-Agent-Yield.git'
+
+                echo "Building branch=${params.BRANCH}, environment=${params.ENVIRONMENT}"
 
                 sh '''
                     set -eux
