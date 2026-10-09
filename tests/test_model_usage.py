@@ -1,3 +1,5 @@
+import os
+
 from yieldmind.model_usage import (
     build_model_usage_record,
     merge_model_usage_records,
