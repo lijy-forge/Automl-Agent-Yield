@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from run_yield_pinn_residual_compare import load_pinn_frame
+from benchmarks.run_yield_pinn_residual_compare import load_pinn_frame
 
 DEFAULT_LF = Path("/Users/lijiayao/Downloads/yield_predict_180lf_20hf_real_lf(1)/low_fidelity")
 DEFAULT_HF = Path("/Users/lijiayao/Downloads/yield_predict_180lf_20hf_real_lf(1)/high_fidelity")

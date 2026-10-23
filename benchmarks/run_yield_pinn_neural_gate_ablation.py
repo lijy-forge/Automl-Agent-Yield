@@ -70,7 +70,7 @@ def run_variant(variant: dict[str, str], out_dir: Path, args: argparse.Namespace
 
     cmd = [
         sys.executable,
-        "run_yield_pinn_branch_ablation_experiment.py",
+        "-m", "benchmarks.run_yield_pinn_branch_ablation_experiment",
         "--variant-root",
         variant["root"],
         "--variant-name",

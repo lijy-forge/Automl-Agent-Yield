@@ -24,7 +24,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from run_yield_pinn_residual_compare import (
+from benchmarks.run_yield_pinn_residual_compare import (
     DEFAULT_HF_DIR,
     DEFAULT_PINN_RUN_DIR,
     import_original_run_module,

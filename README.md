@@ -15,6 +15,7 @@
 >
 > 因此仓库内代码不可直接端到端运行；如需了解系统设计，建议阅读
 > `run_yield.py`（有限状态机编排）与 `operation_agent/yield_guardrails.py`（确定性护栏层）。
+> 基线对比、消融与诊断实验见 [`benchmarks/`](benchmarks/README.md)。
 
 This repository is now focused on high-solid-content slurry yield-stress
 prediction. The original domain methods remain on `YieldAgentManager`, while

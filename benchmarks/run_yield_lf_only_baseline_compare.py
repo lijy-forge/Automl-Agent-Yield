@@ -24,7 +24,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from run_yield_pinn_residual_compare import (
+from benchmarks.run_yield_pinn_residual_compare import (
     DEFAULT_HF_DIR,
     DEFAULT_LF_DIR,
     import_original_run_module,

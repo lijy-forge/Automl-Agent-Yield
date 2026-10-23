@@ -26,7 +26,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from run_yield_classmate_pinn_original_compare import (
+from benchmarks.run_yield_classmate_pinn_original_compare import (
     ORIGINAL_ROOT,
     ORIGINAL_RUN_SCRIPT,
     ensure_original_files,

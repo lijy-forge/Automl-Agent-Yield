@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from run_yield_pinn_residual_compare import (
+from benchmarks.run_yield_pinn_residual_compare import (
     DEFAULT_HF_DIR,
     import_original_run_module,
     load_pinn_frame,
